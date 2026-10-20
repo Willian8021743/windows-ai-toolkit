@@ -1,0 +1,474 @@
+"""Three repairs for contradictions the coherence checker found in a real lab.
+
+The lab was 153 devices and it opened cleanly. It also declared one interface
+five times, served DHCP for networks nothing routed, gave four routers the
+gateway address a fifth was offering as its HSRP virtual, and left nineteen
+servers and printers pointing at a gateway no interface answered for.
+"""
+
+from __future__ import annotations
+
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+from generate_pkt import (  # noqa: E402
+    _drop_cables_the_plan_did_not_ask_for,
+    _repair_invalid_link_ports,
+    _retarget_config_to_real_interface_names,
+    _add_missing_vlans_to_the_database,
+    _separate_config_blocks,
+    _drop_config_for_absent_interfaces,
+    _drop_vlan_subinterfaces_off_router_links,
+    _merge_repeated_interface_blocks,
+    _move_static_hosts_onto_their_vlan_network,
+)
+
+
+def _device(name: str, kind: str, config: list[str]) -> ET.Element:
+    device = ET.fromstring(
+        "<DEVICE><ENGINE><NAME/><TYPE/><SAVE_REF_ID/><RUNNINGCONFIG/></ENGINE></DEVICE>"
+    )
+    device.find("./ENGINE/NAME").text = name
+    device.find("./ENGINE/TYPE").text = kind
+    device.find("./ENGINE/SAVE_REF_ID").text = f"ref-{name}"
+    lines = device.find("./ENGINE/RUNNINGCONFIG")
+    for line in config:
+        ET.SubElement(lines, "LINE").text = line
+    return device
+
+
+def _host(name: str, kind: str, address: str, mask: str, gateway: str, dhcp: str = "false") -> ET.Element:
+    device = _device(name, kind, [])
+    port = ET.SubElement(device, "PORT")
+    ET.SubElement(port, "NAME").text = "FastEthernet0"
+    ET.SubElement(port, "IP").text = address
+    ET.SubElement(port, "SUBNET").text = mask
+    ET.SubElement(port, "PORT_DHCP_ENABLE").text = dhcp
+    ET.SubElement(device, "GATEWAY").text = gateway
+    return device
+
+
+def _lab(devices: list[ET.Element], cables: list[tuple[str, str, str, str]] = ()) -> ET.Element:
+    root = ET.fromstring("<PACKETTRACER5><NETWORK><DEVICES/><LINKS/></NETWORK></PACKETTRACER5>")
+    for device in devices:
+        root.find(".//DEVICES").append(device)
+    links = root.find(".//LINKS")
+    for left, left_port, right, right_port in cables:
+        cable = ET.SubElement(ET.SubElement(links, "LINK"), "CABLE")
+        ET.SubElement(cable, "FROM").text = f"ref-{left}"
+        ET.SubElement(cable, "PORT").text = left_port
+        ET.SubElement(cable, "TO").text = f"ref-{right}"
+        ET.SubElement(cable, "PORT").text = right_port
+    return root
+
+
+def _lines(root: ET.Element, name: str) -> list[str]:
+    for device in root.findall(".//DEVICES/DEVICE"):
+        if (device.findtext("./ENGINE/NAME") or "") == name:
+            return [(node.text or "").strip() for node in device.findall("./ENGINE/RUNNINGCONFIG/LINE")]
+    return []
+
+
+def _address(root: ET.Element, name: str) -> tuple[str, str]:
+    for device in root.findall(".//DEVICES/DEVICE"):
+        if (device.findtext("./ENGINE/NAME") or "") == name:
+            return ((device.findtext(".//PORT/IP") or ""), (device.findtext(".//GATEWAY") or ""))
+    return ("", "")
+
+
+TRUNK = [
+    "interface GigabitEthernet0/1.10",
+    " description Idare",
+    " encapsulation dot1Q 10",
+    " ip address 10.10.10.1 255.255.255.0",
+    "!",
+]
+
+ACCESS = ["interface FastEthernet0/1", " switchport mode access", " switchport access vlan 10", "!"]
+
+
+def test_five_blocks_become_the_one_the_device_would_end_up_with() -> None:
+    config = TRUNK + [
+        "interface GigabitEthernet0/1.10",
+        " description VLAN10 standby",
+        " ip address 10.10.10.3 255.255.255.0",
+        " standby 10 ip 10.10.10.1",
+        "!",
+    ]
+    root = _lab([_device("R1", "Router", config)])
+    assert _merge_repeated_interface_blocks(root)
+    lines = _lines(root, "R1")
+    assert lines.count("interface GigabitEthernet0/1.10") == 1
+    # IOS keeps the last value of each setting, and one description.
+    assert "ip address 10.10.10.3 255.255.255.0" in lines
+    assert "ip address 10.10.10.1 255.255.255.0" not in lines
+    assert lines.count("description VLAN10 standby") == 1
+    assert "description Idare" not in lines
+    assert "standby 10 ip 10.10.10.1" in lines
+    assert "encapsulation dot1Q 10" in lines
+
+
+def test_merging_twice_changes_nothing_the_second_time() -> None:
+    config = TRUNK + ["interface GigabitEthernet0/1.10", " ip address 10.10.10.3 255.255.255.0", "!"]
+    root = _lab([_device("R1", "Router", config)])
+    _merge_repeated_interface_blocks(root)
+    once = _lines(root, "R1")
+    assert not _merge_repeated_interface_blocks(root)
+    assert _lines(root, "R1") == once
+
+
+def test_a_vlan_subinterface_facing_another_router_goes() -> None:
+    """It cannot carry the VLAN, and it claims the gateway address anyway."""
+    root = _lab(
+        [_device("R5", "Router", TRUNK), _device("R6", "Router", [])],
+        [("R5", "GigabitEthernet0/1", "R6", "GigabitEthernet0/1")],
+    )
+    assert _drop_vlan_subinterfaces_off_router_links(root)
+    assert "interface GigabitEthernet0/1.10" not in _lines(root, "R5")
+
+
+def test_a_vlan_subinterface_facing_a_switch_stays() -> None:
+    root = _lab(
+        [_device("R1", "Router", TRUNK), _device("SW1", "Switch", [])],
+        [("R1", "GigabitEthernet0/1", "SW1", "GigabitEthernet0/1")],
+    )
+    assert _drop_vlan_subinterfaces_off_router_links(root) == []
+    assert "interface GigabitEthernet0/1.10" in _lines(root, "R1")
+
+
+def test_a_static_host_moves_onto_the_network_its_vlan_is_routed_on() -> None:
+    """Server6 held 192.168.10.13 in a VLAN routed on 10.10.10.0/24."""
+    root = _lab(
+        [
+            _device("R1", "Router", TRUNK),
+            _device("SW1", "Switch", ACCESS),
+            _host("Server6", "Server", "192.168.10.13", "255.255.255.0", "192.168.10.1"),
+        ],
+        [
+            ("R1", "GigabitEthernet0/1", "SW1", "GigabitEthernet0/1"),
+            ("SW1", "FastEthernet0/1", "Server6", "FastEthernet0"),
+        ],
+    )
+    assert _move_static_hosts_onto_their_vlan_network(root)
+    # The host part is kept, so the lab still reads the way it was asked for.
+    assert _address(root, "Server6") == ("10.10.10.13", "10.10.10.1")
+
+
+def test_a_host_already_on_its_vlan_network_is_left_alone() -> None:
+    root = _lab(
+        [
+            _device("R1", "Router", TRUNK),
+            _device("SW1", "Switch", ACCESS),
+            _host("PC1", "Pc", "10.10.10.20", "255.255.255.0", "10.10.10.1"),
+        ],
+        [
+            ("R1", "GigabitEthernet0/1", "SW1", "GigabitEthernet0/1"),
+            ("SW1", "FastEthernet0/1", "PC1", "FastEthernet0"),
+        ],
+    )
+    assert _move_static_hosts_onto_their_vlan_network(root) == []
+    assert _address(root, "PC1") == ("10.10.10.20", "10.10.10.1")
+
+
+def test_a_dhcp_client_is_left_alone() -> None:
+    root = _lab(
+        [
+            _device("R1", "Router", TRUNK),
+            _device("SW1", "Switch", ACCESS),
+            _host("PC1", "Pc", "192.168.1.5", "255.255.255.0", "192.168.1.1", dhcp="true"),
+        ],
+        [
+            ("R1", "GigabitEthernet0/1", "SW1", "GigabitEthernet0/1"),
+            ("SW1", "FastEthernet0/1", "PC1", "FastEthernet0"),
+        ],
+    )
+    assert _move_static_hosts_onto_their_vlan_network(root) == []
+
+
+def test_a_router_on_an_access_port_is_not_a_host() -> None:
+    """The first version rewrote a router WAN address from 200.10.0.2."""
+    router = _device("R2", "Router", [])
+    port = ET.SubElement(router, "PORT")
+    ET.SubElement(port, "NAME").text = "GigabitEthernet0/0"
+    ET.SubElement(port, "IP").text = "200.10.0.2"
+    ET.SubElement(port, "SUBNET").text = "255.255.255.252"
+    root = _lab(
+        [_device("R1", "Router", TRUNK), _device("SW1", "Switch", ACCESS), router],
+        [
+            ("R1", "GigabitEthernet0/1", "SW1", "GigabitEthernet0/1"),
+            ("SW1", "FastEthernet0/1", "R2", "GigabitEthernet0/0"),
+        ],
+    )
+    assert _move_static_hosts_onto_their_vlan_network(root) == []
+    assert root.findall(".//DEVICES/DEVICE")[2].findtext(".//PORT/IP") == "200.10.0.2"
+
+
+def _switch_with_ports(name: str, config: list[str], ports: int = 4) -> ET.Element:
+    device = _device(name, "Switch", config)
+    engine = device.find("./ENGINE")
+    slot = ET.SubElement(ET.SubElement(engine, "MODULE"), "SLOT")
+    for _ in range(ports):
+        socket = ET.SubElement(ET.SubElement(slot, "MODULE"), "PORT")
+        ET.SubElement(socket, "TYPE").text = "eCopperFastEthernet"
+    return device
+
+
+def test_a_management_svi_is_not_hardware_and_is_not_deleted() -> None:
+    """"management vlan 99 ve telnet olsun" produced a lab with nothing to telnet into.
+
+    `port_exists` says a VLAN interface is not a socket, which is true and is
+    the wrong question: an SVI is configuration. Reading it as "the device does
+    not have this interface" deleted the management address while leaving VLAN
+    99 declared, assigned to ports and allowed on every trunk.
+    """
+    config = [
+        "interface FastEthernet0/1",
+        " switchport access vlan 99",
+        "!",
+        "interface Vlan99",
+        " ip address 10.10.99.2 255.255.255.0",
+        "!",
+    ]
+    root = _lab([_switch_with_ports("SW1", config)])
+    _drop_config_for_absent_interfaces(root)
+    lines = _lines(root, "SW1")
+    assert "interface Vlan99" in lines
+    assert "ip address 10.10.99.2 255.255.255.0" in lines
+
+
+def test_configuration_for_hardware_that_really_is_absent_still_goes() -> None:
+    root = _lab([_switch_with_ports("SW1", ["interface GigabitEthernet9/9", " shutdown", "!"])])
+    assert _drop_config_for_absent_interfaces(root)
+    assert "interface GigabitEthernet9/9" not in _lines(root, "SW1")
+
+
+def test_a_host_keeps_the_cable_the_plan_chose() -> None:
+    """A device held back for a planned name brings its donor cabling with it."""
+    root = _lab(
+        [_device("SW1", "Switch", []), _device("SW2", "Switch", []), _device("PC3", "Pc", [])],
+        [
+            ("SW1", "FastEthernet0/3", "PC3", "FastEthernet0"),
+            ("PC3", "FastEthernet0", "SW2", "FastEthernet0/7"),
+        ],
+    )
+    blueprint = {"links": [{"a": {"dev": "PC3", "port": "FastEthernet0"}, "b": {"dev": "SW2", "port": "FastEthernet0/7"}}]}
+    assert _drop_cables_the_plan_did_not_ask_for(root, blueprint)
+    remaining = [
+        (cable.findtext("FROM"), cable.findtext("TO"))
+        for cable in root.findall(".//LINKS/LINK/CABLE")
+    ]
+    assert remaining == [("ref-PC3", "ref-SW2")], remaining
+
+
+def test_a_host_with_one_cable_is_left_alone() -> None:
+    root = _lab(
+        [_device("SW1", "Switch", []), _device("PC1", "Pc", [])],
+        [("SW1", "FastEthernet0/1", "PC1", "FastEthernet0")],
+    )
+    assert _drop_cables_the_plan_did_not_ask_for(root, {"links": []}) == []
+    assert len(root.findall(".//LINKS/LINK")) == 1
+
+
+def test_a_lab_with_no_vlans_still_puts_hosts_on_the_router_segment() -> None:
+    """Six workstations, three address plans, and one router interface."""
+    router = _device("R1", "Router", ["interface GigabitEthernet0/0", " ip address 192.168.3.254 255.255.255.0", "!"])
+    switch = _device("SW1", "Switch", ["interface FastEthernet0/1", " switchport access vlan 1", "!"])
+    host = _host("PC1", "Pc", "192.168.1.20", "255.255.255.0", "192.168.1.1")
+    root = _lab(
+        [router, switch, host],
+        [
+            ("R1", "GigabitEthernet0/0", "SW1", "GigabitEthernet0/1"),
+            ("SW1", "FastEthernet0/1", "PC1", "FastEthernet0"),
+        ],
+    )
+    assert _move_static_hosts_onto_their_vlan_network(root)
+    assert _address(root, "PC1") == ("192.168.3.20", "192.168.3.254")
+
+
+def _wireless_laptop(name: str) -> ET.Element:
+    """A laptop whose Ethernet module was swapped for a wireless one."""
+    device = _device(name, "Laptop", [])
+    slot = ET.SubElement(ET.SubElement(device.find("./ENGINE"), "MODULE"), "SLOT")
+    for kind in ("eHostWirelessN", "eBluetooth"):
+        socket = ET.SubElement(ET.SubElement(slot, "MODULE"), "PORT")
+        ET.SubElement(socket, "TYPE").text = kind
+    return device
+
+
+def _copper_switch(name: str, ports: int = 4) -> ET.Element:
+    device = _device(name, "Switch", [])
+    slot = ET.SubElement(ET.SubElement(device.find("./ENGINE"), "MODULE"), "SLOT")
+    for _ in range(ports):
+        socket = ET.SubElement(ET.SubElement(slot, "MODULE"), "PORT")
+        ET.SubElement(socket, "TYPE").text = "eCopperFastEthernet"
+    return device
+
+
+def _copper_host(name: str) -> ET.Element:
+    device = _device(name, "Pc", [])
+    slot = ET.SubElement(ET.SubElement(device.find("./ENGINE"), "MODULE"), "SLOT")
+    socket = ET.SubElement(ET.SubElement(slot, "MODULE"), "PORT")
+    ET.SubElement(socket, "TYPE").text = "eCopperFastEthernet"
+    return device
+
+
+def test_a_cable_to_a_socket_the_device_does_not_have_is_removed() -> None:
+    """The wireless lab was refused by Packet Tracer for exactly this.
+
+    The donor's laptops carry `eHostWirelessN` and `eBluetooth` and no copper
+    socket; the plan cabled them on `FastEthernet0`; no relocation existed, so
+    the repair reported the fault and left the name in place -- and an invalid
+    interface name is what stops the file opening at all. A laptop with only a
+    wireless card joins over the air, so the cable is what is wrong.
+    """
+    root = _lab(
+        [_copper_switch("SW1"), _wireless_laptop("Laptop1")],
+        [("SW1", "FastEthernet0/1", "Laptop1", "FastEthernet0")],
+    )
+    notes = _repair_invalid_link_ports(root)
+    assert any("no such socket" in note for note in notes), notes
+    assert root.findall(".//LINKS/LINK") == []
+
+
+def test_a_cable_to_a_socket_the_device_does_have_is_kept() -> None:
+    root = _lab(
+        [_copper_switch("SW1"), _copper_host("PC1")],
+        [("SW1", "FastEthernet0/1", "PC1", "FastEthernet0")],
+    )
+    _repair_invalid_link_ports(root)
+    assert len(root.findall(".//LINKS/LINK")) == 1
+
+
+def _router_with_ports(name: str, config: list[str], ports: int = 3) -> ET.Element:
+    """A 2911: GigabitEthernet0/0 .. 0/2, and no ISR-style 0/0/0.
+
+    The device's own blocks come first, the way a donor writes them: the shape a
+    device uses is read from the interfaces it already names, so a fixture
+    carrying only the stray ISR-style block teaches `port_exists` the wrong
+    shape and nothing gets retargeted.
+    """
+    own: list[str] = []
+    for index in range(ports):
+        own += [f"interface GigabitEthernet0/{index}", " duplex auto", "!"]
+    device = _device(name, "Router", own + config)
+    slot = ET.SubElement(ET.SubElement(device.find("./ENGINE"), "MODULE"), "SLOT")
+    for _ in range(ports):
+        socket = ET.SubElement(ET.SubElement(slot, "MODULE"), "PORT")
+        ET.SubElement(socket, "TYPE").text = "eCopperGigabitEthernet"
+    return device
+
+
+def test_config_written_for_an_isr_lands_on_the_2911_that_arrived() -> None:
+    """The IPv6 lab shipped with no IPv6 address on anything.
+
+    The planner named `GigabitEthernet0/0/0` from the model it planned, the
+    donor supplied a 2911, and the drop pass deleted the block -- taking the
+    address and every OSPFv3 line with it, while `ipv6 unicast-routing` survived
+    because it is global.
+    """
+    config = [
+        "interface GigabitEthernet0/0/0",
+        " ipv6 address 2001:db8:1::1/64",
+        " ipv6 ospf 1 area 0",
+        "!",
+    ]
+    root = _lab([_router_with_ports("R1", config)])
+    assert _retarget_config_to_real_interface_names(root)
+    lines = _lines(root, "R1")
+    # The header the device does not have is gone, and the settings it carried
+    # now sit under one it does. Two blocks of that name may exist until the
+    # merge pass combines them, which is the next pass in both pipelines.
+    assert "interface GigabitEthernet0/0/0" not in lines
+    assert "interface GigabitEthernet0/0" in lines
+    assert "ipv6 address 2001:db8:1::1/64" in lines
+    assert "ipv6 ospf 1 area 0" in lines
+    _merge_repeated_interface_blocks(root)
+    merged = _lines(root, "R1")
+    assert merged.count("interface GigabitEthernet0/0") == 1
+    assert "ipv6 address 2001:db8:1::1/64" in merged
+
+
+def test_a_name_the_device_really_has_is_not_touched() -> None:
+    root = _lab([_router_with_ports("R1", [])])
+    assert _retarget_config_to_real_interface_names(root) == []
+    assert "interface GigabitEthernet0/1" in _lines(root, "R1")
+
+
+def test_a_subinterface_keeps_its_vlan_tag_when_the_parent_is_respelled() -> None:
+    config = ["interface GigabitEthernet0/0/1.30", " encapsulation dot1Q 30", "!"]
+    root = _lab([_router_with_ports("R1", config)])
+    _retarget_config_to_real_interface_names(root)
+    assert "interface GigabitEthernet0/1.30" in _lines(root, "R1")
+
+
+def test_a_vlan_in_the_config_is_created_in_the_database() -> None:
+    """`vlan 80` in the running config does not create VLAN 80 in the switch.
+
+    Packet Tracer keeps the VLAN database as its own structure. A port assigned
+    to a VLAN the database does not hold forwards nothing, and the lab reads as
+    fully configured throughout. Measured on the enterprise lab: SW5's real
+    database held the donor's nine and none of the eight the skill declared, and
+    hosts in the donor's VLANs reached their gateway 4/4 while hosts in the
+    added ones reached nothing.
+    """
+    switch = _device(
+        "SW1",
+        "Switch",
+        ["vlan 80", " name ANBAR", "!", "interface FastEthernet0/1", " switchport access vlan 150", "!"],
+    )
+    engine = switch.find("./ENGINE")
+    database = ET.SubElement(engine, "VLANS")
+    for number, name in ((1, "default"), (1002, "fddi-default")):
+        entry = ET.SubElement(database, "VLAN")
+        entry.set("name", name)
+        entry.set("number", str(number))
+        entry.set("rspan", "0")
+
+    root = _lab([switch])
+    assert _add_missing_vlans_to_the_database(root)
+    numbers = {entry.get("number") for entry in database.findall("VLAN")}
+    assert {"1", "80", "150", "1002"} <= numbers
+    assert database.find("VLAN[@number='80']").get("name") == "ANBAR"
+    assert database.find("VLAN[@number='150']").get("name") == "VLAN150"
+    # Running it again adds nothing: a generated lab is the next build's donor.
+    assert _add_missing_vlans_to_the_database(root) == []
+
+
+def test_the_factory_vlans_are_not_invented() -> None:
+    switch = _device("SW1", "Switch", ["interface FastEthernet0/1", " switchport access vlan 1002", "!"])
+    ET.SubElement(switch.find("./ENGINE"), "VLANS")
+    root = _lab([switch])
+    assert _add_missing_vlans_to_the_database(root) == []
+
+
+def test_a_block_that_follows_a_sub_block_gets_its_separator_back() -> None:
+    """Packet Tracer swallowed `interface GigabitEthernet0/1.80` without it.
+
+    The file carried the subinterface with an address and HSRP; Packet Tracer's
+    own port list for R1 did not contain it, so VLAN 80 had a gateway on paper
+    and nothing answered on it.
+    """
+    config = [
+        "ip dhcp pool VLAN30",
+        " network 10.10.30.0 255.255.255.0",
+        " default-router 10.10.30.1",
+        "interface GigabitEthernet0/1.80",
+        " encapsulation dot1Q 80",
+        "!",
+    ]
+    root = _lab([_device("R1", "Router", config)])
+    assert _separate_config_blocks(root)
+    lines = _lines(root, "R1")
+    assert lines[lines.index("interface GigabitEthernet0/1.80") - 1] == "!"
+    assert _separate_config_blocks(root) == []
+
+
+def test_a_config_that_already_separates_its_blocks_is_untouched() -> None:
+    config = ["interface GigabitEthernet0/0", " no shutdown", "!", "interface GigabitEthernet0/1", " no shutdown", "!"]
+    root = _lab([_device("R1", "Router", config)])
+    assert _separate_config_blocks(root) == []
+    # `_lines` strips, so compare against the same shape.
+    assert _lines(root, "R1") == [line.strip() for line in config]

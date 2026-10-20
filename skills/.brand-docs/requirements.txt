@@ -1,0 +1,13 @@
+# brand-docs runtime dependencies (the contract; doctor.py checks these at runtime).
+# Maintainers/CI use requirements-ci.txt, which pins this stack plus test tools.
+# External binaries (soffice/libreoffice, pdftoppm) are NOT pip-installable and are
+# probed by doctor.py - their absence degrades visual QA (L1/L2) but never blocks L0.
+# Optional fallback: install PyMuPDF separately (`python -m pip install PyMuPDF`)
+# to rasterize PDFs when pdftoppm is unavailable.
+# Optional OCR uses the external `tesseract` binary; it is probed by doctor.py
+# and is intentionally not a pip requirement.
+python-docx>=1.1
+python-pptx>=1.0
+openpyxl>=3.1
+lxml>=5.0
+Pillow>=10.0

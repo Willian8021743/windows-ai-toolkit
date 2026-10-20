@@ -1,0 +1,19 @@
+# Codex CLI 配置片段
+# 目标文件: %USERPROFILE%\.codex\config.toml
+
+[mcp_servers.windows-mcp]
+command = "C:\\Users\\<you>\\.local\\bin\\windows-mcp.exe"
+args = ["serve"]
+
+[mcp_servers.playwright]
+command = "npx"
+args = ["-y", "@playwright/mcp@latest", "--browser", "chrome"]
+
+[mcp_servers.figma]
+url = "https://mcp.figma.com/mcp"
+
+[mcp_servers.notion]
+url = "https://mcp.notion.com/mcp"
+
+[mcp_servers.linear]
+url = "https://mcp.linear.app/mcp"

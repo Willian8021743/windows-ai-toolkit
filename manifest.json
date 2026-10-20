@@ -1,0 +1,526 @@
+{
+  "name": "windows-ai-toolkit",
+  "version": "1.0.0",
+  "generatedAt": "2026-10-20T10:14:29.960Z",
+  "platform": "windows",
+  "stats": {
+    "skills": 61,
+    "files": 675,
+    "sizeKB": 11390
+  },
+  "skills": [
+    {
+      "dir": ".brand-docs",
+      "name": ".brand-docs",
+      "category": "办公与文档",
+      "license": null,
+      "files": 61,
+      "sizeKB": 1196
+    },
+    {
+      "dir": "brand-docx",
+      "name": "brand-docx",
+      "category": "办公与文档",
+      "license": null,
+      "files": 11,
+      "sizeKB": 67
+    },
+    {
+      "dir": "brand-pptx",
+      "name": "brand-pptx",
+      "category": "办公与文档",
+      "license": null,
+      "files": 4,
+      "sizeKB": 46
+    },
+    {
+      "dir": "brand-xlsx",
+      "name": "brand-xlsx",
+      "category": "办公与文档",
+      "license": null,
+      "files": 4,
+      "sizeKB": 45
+    },
+    {
+      "dir": "data-cleaning-for-excel",
+      "name": "data-cleaning-for-excel",
+      "category": "办公与文档",
+      "license": null,
+      "files": 1,
+      "sizeKB": 2
+    },
+    {
+      "dir": "deck-refresh",
+      "name": "deck-refresh",
+      "category": "办公与文档",
+      "license": null,
+      "files": 1,
+      "sizeKB": 7
+    },
+    {
+      "dir": "document-polisher",
+      "name": "document-polisher",
+      "category": "办公与文档",
+      "license": null,
+      "files": 13,
+      "sizeKB": 52
+    },
+    {
+      "dir": "excel-hygiene",
+      "name": "excel-hygiene",
+      "category": "办公与文档",
+      "license": "Apache-2.0",
+      "files": 8,
+      "sizeKB": 36
+    },
+    {
+      "dir": "formula-audit-checker",
+      "name": "formula-audit-checker",
+      "category": "办公与文档",
+      "license": null,
+      "files": 1,
+      "sizeKB": 11
+    },
+    {
+      "dir": "inputs-calcs-outputs-design",
+      "name": "inputs-calcs-outputs-design",
+      "category": "办公与文档",
+      "license": null,
+      "files": 1,
+      "sizeKB": 10
+    },
+    {
+      "dir": "mermaid-to-vsdx",
+      "name": "mermaid-to-vsdx",
+      "category": "办公与文档",
+      "license": null,
+      "files": 6,
+      "sizeKB": 65
+    },
+    {
+      "dir": "model-architecture-template",
+      "name": "model-architecture-template",
+      "category": "办公与文档",
+      "license": null,
+      "files": 1,
+      "sizeKB": 11
+    },
+    {
+      "dir": "pdf-converter",
+      "name": "pdf-converter",
+      "category": "办公与文档",
+      "license": null,
+      "files": 7,
+      "sizeKB": 311
+    },
+    {
+      "dir": "pivot-table-builder",
+      "name": "pivot-table-builder",
+      "category": "办公与文档",
+      "license": null,
+      "files": 1,
+      "sizeKB": 2
+    },
+    {
+      "dir": "scenario-manager",
+      "name": "scenario-manager",
+      "category": "办公与文档",
+      "license": null,
+      "files": 1,
+      "sizeKB": 8
+    },
+    {
+      "dir": "answer-me-with-html",
+      "name": "answer-me-with-html",
+      "category": "创作与设计",
+      "license": null,
+      "files": 5,
+      "sizeKB": 955
+    },
+    {
+      "dir": "codex-image",
+      "name": "codex-image",
+      "category": "创作与设计",
+      "license": null,
+      "files": 4,
+      "sizeKB": 27
+    },
+    {
+      "dir": "contact-vcard-extractor",
+      "name": "contact-vcard-extractor",
+      "category": "创作与设计",
+      "license": null,
+      "files": 2,
+      "sizeKB": 13
+    },
+    {
+      "dir": "doubao-tts",
+      "name": "doubao-tts",
+      "category": "创作与设计",
+      "license": null,
+      "files": 2,
+      "sizeKB": 18
+    },
+    {
+      "dir": "free-tts",
+      "name": "free-tts",
+      "category": "创作与设计",
+      "license": null,
+      "files": 1,
+      "sizeKB": 4
+    },
+    {
+      "dir": "frontend-design",
+      "name": "frontend-design",
+      "category": "创作与设计",
+      "license": "Complete terms in LICENSE.txt",
+      "files": 2,
+      "sizeKB": 19
+    },
+    {
+      "dir": "generative-ui-minis",
+      "name": "generative-ui-minis",
+      "category": "创作与设计",
+      "license": null,
+      "files": 3,
+      "sizeKB": 23
+    },
+    {
+      "dir": "hyperframes",
+      "name": "hyperframes",
+      "category": "创作与设计",
+      "license": null,
+      "files": 39,
+      "sizeKB": 163
+    },
+    {
+      "dir": "nano-banana",
+      "name": "nano-banana",
+      "category": "创作与设计",
+      "license": null,
+      "files": 4,
+      "sizeKB": 11
+    },
+    {
+      "dir": "web-artifacts-builder",
+      "name": "web-artifacts-builder",
+      "category": "创作与设计",
+      "license": "Complete terms in LICENSE.txt",
+      "files": 5,
+      "sizeKB": 45
+    },
+    {
+      "dir": "evidence-chain-builder",
+      "name": "evidence-chain-builder",
+      "category": "金融与投研",
+      "license": null,
+      "files": 4,
+      "sizeKB": 33
+    },
+    {
+      "dir": "ib-check-deck",
+      "name": "ib-check-deck",
+      "category": "金融与投研",
+      "license": null,
+      "files": 4,
+      "sizeKB": 17
+    },
+    {
+      "dir": "reverse-dcf",
+      "name": "reverse-dcf",
+      "category": "金融与投研",
+      "license": null,
+      "files": 1,
+      "sizeKB": 11
+    },
+    {
+      "dir": "clash-controller",
+      "name": "Clash 控制器",
+      "category": "开发与运维",
+      "license": null,
+      "files": 5,
+      "sizeKB": 26
+    },
+    {
+      "dir": "cloudflare-dns",
+      "name": "cloudflare-dns",
+      "category": "开发与运维",
+      "license": null,
+      "files": 1,
+      "sizeKB": 6
+    },
+    {
+      "dir": "github-sync-helper",
+      "name": "github-sync-helper",
+      "category": "开发与运维",
+      "license": null,
+      "files": 2,
+      "sizeKB": 43
+    },
+    {
+      "dir": "memos-api",
+      "name": "memos-api",
+      "category": "开发与运维",
+      "license": null,
+      "files": 2,
+      "sizeKB": 6
+    },
+    {
+      "dir": "notion-hub",
+      "name": "notion-hub",
+      "category": "开发与运维",
+      "license": null,
+      "files": 2,
+      "sizeKB": 55
+    },
+    {
+      "dir": "production-agent-public",
+      "name": "production-agent-public",
+      "category": "开发与运维",
+      "license": null,
+      "files": 3,
+      "sizeKB": 13
+    },
+    {
+      "dir": "self-improving-agent",
+      "name": "self-improving-agent",
+      "category": "开发与运维",
+      "license": null,
+      "files": 8,
+      "sizeKB": 29
+    },
+    {
+      "dir": "browser-use",
+      "name": "browser-use",
+      "category": "浏览器与自动化",
+      "license": null,
+      "files": 1,
+      "sizeKB": 15
+    },
+    {
+      "dir": "webapp-testing",
+      "name": "webapp-testing",
+      "category": "浏览器与自动化",
+      "license": "Complete terms in LICENSE.txt",
+      "files": 6,
+      "sizeKB": 22
+    },
+    {
+      "dir": "bilibili-hub",
+      "name": "bilibili-hub",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 6,
+      "sizeKB": 55
+    },
+    {
+      "dir": "douyin-downloader",
+      "name": "douyin-downloader",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 4,
+      "sizeKB": 23
+    },
+    {
+      "dir": "fucai3d-latest",
+      "name": "fucai3d-latest",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 3,
+      "sizeKB": 12
+    },
+    {
+      "dir": "maimai-hub",
+      "name": "maimai-hub",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 2,
+      "sizeKB": 14
+    },
+    {
+      "dir": "qbt-hub",
+      "name": "qbt-hub",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 2,
+      "sizeKB": 36
+    },
+    {
+      "dir": "quark-hub",
+      "name": "quark-hub",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 5,
+      "sizeKB": 41
+    },
+    {
+      "dir": "spotify-hub",
+      "name": "spotify-hub",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 3,
+      "sizeKB": 20
+    },
+    {
+      "dir": "tg-hub",
+      "name": "tg-hub",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 8,
+      "sizeKB": 48
+    },
+    {
+      "dir": "twitter-downloader",
+      "name": "twitter-downloader",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 3,
+      "sizeKB": 10
+    },
+    {
+      "dir": "twitter-x-hub",
+      "name": "twitter-x-hub",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 8,
+      "sizeKB": 70
+    },
+    {
+      "dir": "weibo-hub",
+      "name": "weibo-hub",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 8,
+      "sizeKB": 34
+    },
+    {
+      "dir": "xianyu-hub",
+      "name": "xianyu-hub",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 9,
+      "sizeKB": 52
+    },
+    {
+      "dir": "xiaohongshu-hub",
+      "name": "xiaohongshu-hub",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 8,
+      "sizeKB": 49
+    },
+    {
+      "dir": "youtube-downloader",
+      "name": "youtube-downloader",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 3,
+      "sizeKB": 27
+    },
+    {
+      "dir": "ytmusic-hub",
+      "name": "ytmusic-hub",
+      "category": "社交与媒体",
+      "license": null,
+      "files": 11,
+      "sizeKB": 33
+    },
+    {
+      "dir": "hello-demo",
+      "name": "hello-demo",
+      "category": "示例",
+      "license": null,
+      "files": 1,
+      "sizeKB": 0
+    },
+    {
+      "dir": "exa-search",
+      "name": "exa-search",
+      "category": "搜索与研究",
+      "license": null,
+      "files": 2,
+      "sizeKB": 8
+    },
+    {
+      "dir": "openstreetmap-marker",
+      "name": "openstreetmap-marker",
+      "category": "搜索与研究",
+      "license": null,
+      "files": 4,
+      "sizeKB": 33
+    },
+    {
+      "dir": "tavily-search",
+      "name": "tavily-search",
+      "category": "搜索与研究",
+      "license": null,
+      "files": 3,
+      "sizeKB": 6
+    },
+    {
+      "dir": "web-content-extractor",
+      "name": "web-content-extractor",
+      "category": "搜索与研究",
+      "license": null,
+      "files": 1,
+      "sizeKB": 2
+    },
+    {
+      "dir": "whenpeak",
+      "name": "whenpeak",
+      "category": "搜索与研究",
+      "license": null,
+      "files": 8,
+      "sizeKB": 27
+    },
+    {
+      "dir": "network-engineering",
+      "name": "network-engineering",
+      "category": "网络与实验",
+      "license": "MIT",
+      "files": 134,
+      "sizeKB": 1850
+    },
+    {
+      "dir": "packet-tracer",
+      "name": "packet-tracer",
+      "category": "网络与实验",
+      "license": null,
+      "files": 20,
+      "sizeKB": 369
+    },
+    {
+      "dir": "pkt",
+      "name": "pkt",
+      "category": "网络与实验",
+      "license": null,
+      "files": 192,
+      "sizeKB": 5148
+    }
+  ],
+  "excluded": [
+    {
+      "dir": "docx",
+      "reason": "Anthropic proprietary license — redistribution prohibited"
+    },
+    {
+      "dir": "pptx",
+      "reason": "Anthropic proprietary license — redistribution prohibited"
+    },
+    {
+      "dir": "xlsx",
+      "reason": "Anthropic proprietary license — redistribution prohibited"
+    },
+    {
+      "dir": "pdf",
+      "reason": "Anthropic proprietary license — redistribution prohibited"
+    }
+  ],
+  "mcpServers": [
+    "windows-mcp",
+    "playwright",
+    "figma",
+    "notion",
+    "linear"
+  ]
+}

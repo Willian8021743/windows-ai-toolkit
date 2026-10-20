@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+output/
+*.pkt
+*.xml
+!templates/
+!templates/**/*.xml
+.pytest_cache/
+.vendor_pytest/
+.pytest_run/
+.pytest-basetemp/
+manual-mode-dir/
+scripts/vendor/_twofish*.pyd
+scripts/vendor/_twofish*.so
+scripts/vendor/_twofish*.dll
+.npm-cache/
+*.tgz
+examples/previews/
+output/corpus-results.json
+
+# Labs found on this machine: catalogued for donor ranking, never published.
+references/local-donor-catalog.json

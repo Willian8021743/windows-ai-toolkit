@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "windows-mcp": {
+      "command": "C:\\Users\\<you>\\.local\\bin\\windows-mcp.exe",
+      "args": ["serve"],
+      "env": {
+        "UV_DEFAULT_INDEX": "https://pypi.tuna.tsinghua.edu.cn/simple"
+      }
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--browser", "chrome"]
+    },
+    "figma": { "url": "https://mcp.figma.com/mcp" },
+    "notion": { "url": "https://mcp.notion.com/mcp" },
+    "linear": { "url": "https://mcp.linear.app/mcp" }
+  }
+}

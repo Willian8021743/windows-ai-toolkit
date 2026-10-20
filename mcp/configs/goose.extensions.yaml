@@ -1,0 +1,31 @@
+# goose 配置片段
+# 目标文件: %APPDATA%\Block\goose\config\config.yaml
+# 把下面两个条目并入已有的 extensions: 之下（保持 2 空格缩进）。
+# 或直接运行: .\scripts\install.ps1 -SkillsTarget none -McpTarget goose
+
+extensions:
+  windows-mcp:
+    type: stdio
+    name: windows-mcp
+    enabled: true
+    cmd: 'C:\Users\<you>\.local\bin\windows-mcp.exe'
+    args:
+    - serve
+    timeout: 300
+    env_keys: []
+    envs:
+      UV_DEFAULT_INDEX: https://pypi.tuna.tsinghua.edu.cn/simple
+
+  playwright:
+    type: stdio
+    name: playwright
+    display_name: Playwright
+    description: Playwright 浏览器自动化 MCP
+    enabled: true
+    cmd: npx
+    args:
+    - -y
+    - '@playwright/mcp@latest'
+    - --browser
+    - chrome
+    timeout: 300

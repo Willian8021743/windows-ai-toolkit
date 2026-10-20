@@ -1,0 +1,307 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from generate_pkt import _sanitize_runtime_sections  # noqa: E402
+from workspace_repair import inspect_donor_coherence, inspect_workspace_integrity, sanitize_generated_physical_workspace  # noqa: E402
+
+
+def _make_physical_leaf(name: str) -> ET.Element:
+    node = ET.Element("NODE")
+    for tag, value in [("X", "0"), ("Y", "0"), ("TYPE", "6")]:
+        child = ET.SubElement(node, tag)
+        child.text = value
+    label = ET.SubElement(node, "NAME")
+    label.set("translate", "true")
+    label.text = name
+    for tag, value in [("SX", "1"), ("SY", "1"), ("W", "0"), ("H", "0"), ("PATH", "")]:
+        child = ET.SubElement(node, tag)
+        child.text = value
+    ET.SubElement(node, "CHILDREN")
+    for tag, value in [
+        ("MANUAL_SCALING", "false"),
+        ("SCALED_PIXMAP_WIDTH", "-842150451"),
+        ("SCALED_PIXMAP_HEIGHT", "-842150451"),
+        ("INIT_WIDTH", "0"),
+        ("INIT_HEIGHT", "0"),
+        ("INIT_SX", "1"),
+        ("INIT_SY", "1"),
+    ]:
+        child = ET.SubElement(node, tag)
+        child.text = value
+    return node
+
+
+def _append_workspace_node(parent: ET.Element, name: str, node_type: str) -> ET.Element:
+    node = ET.SubElement(parent, "NODE")
+    for tag, value in [("X", "0"), ("Y", "0"), ("TYPE", node_type)]:
+        child = ET.SubElement(node, tag)
+        child.text = value
+    label = ET.SubElement(node, "NAME")
+    label.set("translate", "true")
+    label.text = name
+    for tag, value in [("SX", "1"), ("SY", "1"), ("W", "0"), ("H", "0"), ("PATH", "")]:
+        child = ET.SubElement(node, tag)
+        child.text = value
+    ET.SubElement(node, "CHILDREN")
+    for tag, value in [
+        ("MANUAL_SCALING", "false"),
+        ("SCALED_PIXMAP_WIDTH", "-842150451"),
+        ("SCALED_PIXMAP_HEIGHT", "-842150451"),
+        ("INIT_WIDTH", "0"),
+        ("INIT_HEIGHT", "0"),
+        ("INIT_SX", "1"),
+        ("INIT_SY", "1"),
+    ]:
+        child = ET.SubElement(node, tag)
+        child.text = value
+    return node
+
+
+def _make_donor_physical_root() -> ET.Element:
+    physical = ET.Element("PHYSICALWORKSPACE")
+    homerack = ET.SubElement(physical, "HOMERACK")
+    homerack.set("translate", "true")
+    homerack.text = "Intercity,Home City,Corporate Office,Main Wiring Closet"
+    intercity = _append_workspace_node(physical, "Intercity", "0")
+    city = _append_workspace_node(intercity.find("./CHILDREN"), "Home City", "1")
+    building = _append_workspace_node(city.find("./CHILDREN"), "Corporate Office", "2")
+    closet = _append_workspace_node(building.find("./CHILDREN"), "Main Wiring Closet", "3")
+    table = _append_workspace_node(closet.find("./CHILDREN"), "Table", "5")
+    rack = _append_workspace_node(closet.find("./CHILDREN"), "Rack", "4")
+    table.find("./CHILDREN").append(_make_physical_leaf("PC0"))
+    rack.find("./CHILDREN").append(_make_physical_leaf("Server0"))
+    return physical
+
+
+def _make_device(name: str) -> ET.Element:
+    device = ET.Element("DEVICE")
+    engine = ET.SubElement(device, "ENGINE")
+    dtype = ET.SubElement(engine, "TYPE")
+    dtype.text = "PC"
+    dtype.set("model", "PC-PT")
+    dname = ET.SubElement(engine, "NAME")
+    dname.text = name
+    workspace = ET.SubElement(device, "WORKSPACE")
+    logical = ET.SubElement(workspace, "LOGICAL")
+    for tag, value in [("X", "100"), ("Y", "120"), ("MEM_ADDR", "1000"), ("DEV_ADDR", "2000")]:
+        node = ET.SubElement(logical, tag)
+        node.text = value
+    physical = ET.SubElement(workspace, "PHYSICAL")
+    physical.text = "{legacy}"
+    cpu = ET.SubElement(workspace, "PHYSICAL_CPUR")
+    ET.SubElement(cpu, "PARENT_PATH").text = "{legacy}"
+    return device
+
+
+def _make_donor_ready_device(name: str, save_ref: str, original_uuid: str, leaf_uuid: str) -> ET.Element:
+    device = ET.Element("DEVICE")
+    engine = ET.SubElement(device, "ENGINE")
+    dtype = ET.SubElement(engine, "TYPE")
+    dtype.text = "PC"
+    dtype.set("model", "PC-PT")
+    dname = ET.SubElement(engine, "NAME")
+    dname.text = name
+    sys_name = ET.SubElement(engine, "SYS_NAME")
+    sys_name.text = name
+    save_ref_node = ET.SubElement(engine, "SAVE_REF_ID")
+    save_ref_node.text = save_ref
+    running = ET.SubElement(engine, "RUNNINGCONFIG")
+    ET.SubElement(running, "LINE").text = f"hostname {name}"
+    startup = ET.SubElement(engine, "STARTUPCONFIG")
+    ET.SubElement(startup, "LINE").text = f"hostname {name}"
+    ET.SubElement(engine, "ORIGINAL_DEVICE_UUID").text = original_uuid
+    ET.SubElement(engine, "CONTAINER_ID").text = "{container}"
+    ET.SubElement(engine, "PARENT_PATH").text = "{parent}"
+    workspace = ET.SubElement(device, "WORKSPACE")
+    logical = ET.SubElement(workspace, "LOGICAL")
+    for tag, value in [("X", "100"), ("Y", "120"), ("MEM_ADDR", "1000"), ("DEV_ADDR", "2000")]:
+        node = ET.SubElement(logical, tag)
+        node.text = value
+    physical = ET.SubElement(workspace, "PHYSICAL")
+    physical.text = "{root},{city},{building},{closet}," + leaf_uuid
+    ET.SubElement(workspace, "PHYSICAL_CPUR")
+    return device
+
+
+def test_sanitize_generated_physical_workspace_rewrites_device_paths() -> None:
+    root = ET.Element("PACKETTRACER5")
+    ET.SubElement(root, "VERSION").text = "5.3.0.0011"
+    root.append(_make_donor_physical_root())
+    network = ET.SubElement(root, "NETWORK")
+    devices = ET.SubElement(network, "DEVICES")
+    devices.append(_make_device("PC0"))
+    ET.SubElement(network, "LINKS")
+
+    sanitize_generated_physical_workspace(root)
+    result = inspect_workspace_integrity(root)
+
+    assert result.workspace_mode == "logical_only_safe"
+    assert result.physical_status == "ok"
+    device = root.find(".//DEVICES/DEVICE")
+    assert device is not None
+    assert device.find("./WORKSPACE/PHYSICAL_CPUR") is None
+    assert device.findtext("./WORKSPACE/PHYSICAL", default="").endswith("Table,PC0")
+    assert root.findtext("./PHYSICALWORKSPACE/NODE/NAME", default="") == "Intercity"
+
+
+def test_inspect_donor_coherence_flags_stale_device_metadata() -> None:
+    donor_root = ET.Element("PACKETTRACER5")
+    ET.SubElement(donor_root, "VERSION").text = "9.0.0.0810"
+    physical = _make_donor_physical_root()
+    rack_children = physical.find("./NODE/CHILDREN/NODE/CHILDREN/NODE/CHILDREN/NODE/CHILDREN/NODE/CHILDREN")
+    assert rack_children is not None
+    leaf = _make_physical_leaf("DONOR-PC")
+    ET.SubElement(leaf, "UUID_STR").text = "{leaf-uuid}"
+    rack_children.append(leaf)
+    donor_root.append(physical)
+    network = ET.SubElement(donor_root, "NETWORK")
+    devices = ET.SubElement(network, "DEVICES")
+    devices.append(_make_donor_ready_device("DONOR-PC", "save-ref-id:1", "{orig-uuid}", "{leaf-uuid}"))
+    ET.SubElement(network, "LINKS")
+
+    generated_root = ET.fromstring(ET.tostring(donor_root, encoding="unicode"))
+    generated_device = generated_root.find(".//DEVICES/DEVICE")
+    assert generated_device is not None
+    generated_device.find("./ENGINE/NAME").text = "NEW-PC"
+
+    result = inspect_donor_coherence(donor_root, generated_root)
+    assert result.device_metadata_status == "invalid"
+    assert any("donor hostname DONOR-PC" in issue or "physical leaf name is DONOR-PC" in issue for issue in result.blocking_issues)
+
+
+def test_sanitize_runtime_sections_preserves_visual_sections_by_default() -> None:
+    root = ET.Element("PACKETTRACER5")
+    filters = ET.SubElement(root, "FILTERS")
+    ET.SubElement(filters, "FILTER")
+    clusters = ET.SubElement(root, "CLUSTERS")
+    ET.SubElement(clusters, "ROOTCLUSTER")
+    rectangles = ET.SubElement(root, "RECTANGLES")
+    rectangle = ET.SubElement(rectangles, "RECTANGLE")
+    ET.SubElement(rectangle, "TopLeftX").text = "100"
+    ET.SubElement(rectangle, "TopLeftY").text = "200"
+    ET.SubElement(rectangle, "BottomRightX").text = "300"
+    ET.SubElement(rectangle, "BottomRightY").text = "400"
+    geo = ET.SubElement(root, "GEOVIEW_GRAPHICSITEMS")
+    ET.SubElement(geo, "ParentPhyObject")
+    ET.SubElement(root, "ANSWER_TREE_SELECTED").text = "3"
+    physical = _make_donor_physical_root()
+    notes = ET.SubElement(physical, "NOTES")
+    note = ET.SubElement(notes, "NOTE")
+    ET.SubElement(note, "X").text = "50"
+    ET.SubElement(note, "Y").text = "60"
+    ET.SubElement(note, "TEXT").text = "visible note"
+    root.append(physical)
+    scenario_set = ET.SubElement(root, "SCENARIOSET")
+    scenario = ET.SubElement(scenario_set, "SCENARIO")
+    ET.SubElement(scenario, "NAME").text = "Scenario 0"
+    command_logs = ET.SubElement(root, "COMMAND_LOGS")
+    ET.SubElement(command_logs, "LOG").text = "keep-me"
+    ceps = ET.SubElement(root, "CEPS")
+    ET.SubElement(ceps, "CEP").text = "keep-me"
+
+    _sanitize_runtime_sections(root)
+
+    assert len(root.find("./FILTERS")) == 1
+    assert len(root.find("./CLUSTERS")) == 1
+    assert len(root.find("./RECTANGLES")) == 1
+    assert len(root.find("./GEOVIEW_GRAPHICSITEMS")) == 1
+    assert len(root.findall("./PHYSICALWORKSPACE//NOTES")[0]) == 1
+    assert root.findtext("./RECTANGLES/RECTANGLE/TopLeftX") == "50000"
+    assert root.findtext("./RECTANGLES/RECTANGLE/BottomRightY") == "50001"
+    assert root.findtext("./PHYSICALWORKSPACE/NOTES/NOTE/X") == "50000"
+    assert root.findtext("./PHYSICALWORKSPACE/NOTES/NOTE/Y") == "50000"
+    assert root.findtext("./PHYSICALWORKSPACE/NOTES/NOTE/TEXT", default="marker") == ""
+    assert root.findtext("./ANSWER_TREE_SELECTED") == "3"
+    assert len(root.find("./SCENARIOSET")) == 1
+    assert root.findtext("./SCENARIOSET/SCENARIO/NAME") == "Scenario 0"
+    assert root.findtext("./COMMAND_LOGS/LOG") == "keep-me"
+    assert root.findtext("./CEPS/CEP") == "keep-me"
+
+
+def test_inspect_donor_coherence_flags_unexpected_visual_emptying() -> None:
+    donor_root = ET.Element("PACKETTRACER5")
+    ET.SubElement(donor_root, "VERSION").text = "9.0.0.0810"
+    ET.SubElement(donor_root, "ANSWER_TREE_SELECTED").text = "3"
+    ET.SubElement(donor_root, "PHYSICALALIGN").text = "false"
+    ET.SubElement(donor_root, "HIDEPHYSICAL").text = "false"
+    ET.SubElement(donor_root, "CABLE_POPUP_IN_PHYSICAL").text = "true"
+    filters = ET.SubElement(donor_root, "FILTERS")
+    ET.SubElement(filters, "FILTER")
+    clusters = ET.SubElement(donor_root, "CLUSTERS")
+    ET.SubElement(clusters, "ROOTCLUSTER")
+    rectangles = ET.SubElement(donor_root, "RECTANGLES")
+    ET.SubElement(rectangles, "RECTANGLE")
+    geoview = ET.SubElement(donor_root, "GEOVIEW_GRAPHICSITEMS")
+    ET.SubElement(geoview, "ParentPhyObject")
+    physical = _make_donor_physical_root()
+    top_notes = ET.SubElement(physical, "NOTES")
+    ET.SubElement(top_notes, "NOTE")
+    donor_root.append(physical)
+    network = ET.SubElement(donor_root, "NETWORK")
+    devices = ET.SubElement(network, "DEVICES")
+    devices.append(_make_donor_ready_device("DONOR-PC", "save-ref-id:1", "{orig-uuid}", "{leaf-uuid}"))
+    ET.SubElement(network, "LINKS")
+
+    generated_root = ET.fromstring(ET.tostring(donor_root, encoding="unicode"))
+    generated_root.find("./FILTERS").clear()
+    generated_root.find("./CLUSTERS").clear()
+    generated_root.find("./RECTANGLES").clear()
+    generated_root.find("./GEOVIEW_GRAPHICSITEMS").clear()
+    generated_root.find("./PHYSICALWORKSPACE/NOTES").clear()
+
+    result = inspect_donor_coherence(donor_root, generated_root)
+
+    assert result.visual_runtime_status == "invalid"
+    assert any("unexpectedly emptied donor visual section FILTERS" in issue for issue in result.blocking_issues)
+    assert any("unexpectedly emptied donor visual section PHYSICALWORKSPACE/NOTES" in issue for issue in result.blocking_issues)
+
+
+def test_inspect_donor_coherence_flags_unexpected_runtime_emptying() -> None:
+    donor_root = ET.Element("PACKETTRACER5")
+    ET.SubElement(donor_root, "VERSION").text = "9.0.0.0810"
+    scenario_set = ET.SubElement(donor_root, "SCENARIOSET")
+    scenario = ET.SubElement(scenario_set, "SCENARIO")
+    ET.SubElement(scenario, "NAME").text = "Scenario 0"
+    command_logs = ET.SubElement(donor_root, "COMMAND_LOGS")
+    ET.SubElement(command_logs, "LOG").text = "keep-me"
+    ceps = ET.SubElement(donor_root, "CEPS")
+    ET.SubElement(ceps, "CEP").text = "keep-me"
+    network = ET.SubElement(donor_root, "NETWORK")
+    devices = ET.SubElement(network, "DEVICES")
+    devices.append(_make_donor_ready_device("DONOR-PC", "save-ref-id:1", "{orig-uuid}", "{leaf-uuid}"))
+    ET.SubElement(network, "LINKS")
+
+    generated_root = ET.fromstring(ET.tostring(donor_root, encoding="unicode"))
+    generated_root.find("./SCENARIOSET").clear()
+    generated_root.find("./COMMAND_LOGS").clear()
+    generated_root.find("./CEPS").clear()
+
+    result = inspect_donor_coherence(donor_root, generated_root)
+
+    assert result.scenario_status == "invalid"
+    assert any("unexpectedly emptied donor runtime section SCENARIOSET" in issue for issue in result.blocking_issues)
+    assert any("unexpectedly emptied donor runtime section COMMAND_LOGS" in issue for issue in result.blocking_issues)
+
+
+def test_a_pruned_name_is_matched_whole_not_as_a_substring() -> None:
+    """A donor carrying both `Switch1` and `Multilayer Switch1` was rejected.
+
+    Pruning `Switch1` left the string present inside the multilayer switch's
+    name, and the leftover check was a plain substring search, so the donor was
+    turned down for a device that had gone. Ids are unique tokens and keep the
+    plain search.
+    """
+    from workspace_repair import _leftover_hit
+
+    text = '<NAME translate="true">Multilayer Switch1</NAME><NAME translate="true">SW1</NAME>'
+
+    assert not _leftover_hit("device-name", "Switch1", text)
+    assert _leftover_hit("device-name", "SW1", text)
+    assert _leftover_hit("save-ref-id", "12345", "abc12345def")
+    assert not _leftover_hit("device-name", "", text)

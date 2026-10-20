@@ -1,0 +1,58 @@
+{
+  "skill_name": "pdf-converter",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "把工作区里的 notes.md 转成 PDF，叫 notes.pdf",
+      "expected_output": "A valid PDF at notes.pdf rendering the Markdown source: headings, tables, code blocks, and correct CJK text + emoji.",
+      "files": [],
+      "assertions": [
+        { "text": "Output file notes.pdf exists at the workspace root and is a valid PDF (magic bytes start with %PDF-, file size > 1 KB)", "type": "file_exists" },
+        { "text": "PDF contains rendered Markdown — headings and tables are visually formatted, not raw # or | pipe syntax (extract with pdftotext or visually inspect)", "type": "contains" }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Turn this HTML into a PDF: <h1>Hello</h1><p>World 2026</p>",
+      "expected_output": "A PDF with an h1 heading and a paragraph; the digits in '2026' render half-width.",
+      "files": [],
+      "assertions": [
+        { "text": "Output file exists and is a valid PDF (%PDF- magic header)", "type": "file_exists" },
+        { "text": "Extracted PDF text contains the word Hello and the digits 2026 in half-width form (use pdftotext)", "type": "contains" }
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Merge chart.png and diagram.jpg into a single PDF called report.pdf",
+      "expected_output": "A single PDF with both images as separate pages, in the order given.",
+      "files": [],
+      "assertions": [
+        { "text": "Output report.pdf exists and is a valid PDF", "type": "file_exists" },
+        { "text": "PDF has exactly 2 pages — verify with `pdfinfo report.pdf | grep Pages` showing 'Pages: 2'", "type": "contains" }
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Convert data.txt to data.pdf",
+      "expected_output": "A valid PDF rendering the plain-text content, with the file stem 'data' shown as the document title heading.",
+      "files": [],
+      "assertions": [
+        { "text": "Output data.pdf exists and is a valid PDF", "type": "file_exists" },
+        { "text": "Extracted PDF text matches the original data.txt content (whitespace-normalized)", "type": "contains" },
+        { "text": "PDF first page shows 'data' as a title heading (the file stem, not the full path or extension)", "type": "contains" }
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Convert evals/pdf-format-test.md to /tmp/format-test.pdf and check it renders 10 pages with the amber theme",
+      "expected_output": "A 10-page PDF matching the bundled reference evals/pdf-format-test.pdf: amber table headers at full width, SVG emoji (not tofu boxes), half-width digits in CJK paragraphs.",
+      "files": [],
+      "assertions": [
+        { "text": "Output /tmp/format-test.pdf exists and is a valid PDF", "type": "file_exists" },
+        { "text": "PDF has exactly 10 pages — verify with `pdfinfo /tmp/format-test.pdf | grep Pages` showing 'Pages: 10'", "type": "contains" },
+        { "text": "File size is in the range 200-350 KB (consistent with the ~275 KB bundled reference)", "type": "file_exists" },
+        { "text": "Emoji render as crisp SVG vector images, not tofu boxes — spot-check with `pdfimages -list /tmp/format-test.pdf` showing embedded image XObjects", "type": "contains" }
+      ]
+    }
+  ]
+}

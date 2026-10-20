@@ -1,0 +1,9 @@
+# local python env created by scripts/setup.sh
+scripts/venv/
+__pycache__/
+*.pyc
+# build outputs / screenshots
+*.pkt
+*.pka
+*.png
+*.xml.bak

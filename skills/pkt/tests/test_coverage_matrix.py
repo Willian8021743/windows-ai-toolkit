@@ -1,0 +1,1630 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from coverage_matrix import (  # noqa: E402
+    build_blueprint_plan,
+    build_capability_matrix,
+    build_coverage_gap_report,
+    build_donor_graph_fit,
+    build_inventory_capability_report,
+    select_capability_matrix_hits,
+)
+from intent_parser import parse_intent  # noqa: E402
+from sample_catalog import SampleDescriptor  # noqa: E402
+
+
+def _sample(origin: str, *, donor_eligible: bool, prototype_eligible: bool, relative_path: str = "sample.pkt") -> SampleDescriptor:
+    return SampleDescriptor(
+        path=relative_path,
+        relative_path=relative_path,
+        version="9.0.0.0810",
+        device_count=4,
+        link_count=3,
+        devices=[
+            {"name": "R1", "type": "Router", "model": "ISR4331"},
+            {"name": "SW1", "type": "Switch", "model": "2960-24TT"},
+            {"name": "AP1", "type": "LightWeightAccessPoint", "model": "AccessPoint-PT"},
+            {"name": "Server1", "type": "Server", "model": "Server-PT"},
+        ],
+        links=[{"from": "R1", "to": "SW1", "media": "eStraightThrough"}],
+        capability_tags=["vlan", "wireless_ap", "server_dns"],
+        topology_tags=["department_lan", "wireless_edge"],
+        preferred_roles=["preferred_vlan", "preferred_wireless"],
+        trust_level="trusted" if origin == "cisco-local" else "curated",
+        origin=origin,
+        role="primary",
+        prototype_eligible=prototype_eligible,
+        donor_eligible=donor_eligible,
+        service_support=["dns"],
+        wireless_mode_tags=["ap_bridge"],
+        device_families=["routers", "switches", "access points", "servers"],
+        model_families=["ISR4331", "2960-24TT", "AccessPoint-PT", "Server-PT"],
+        port_media_types=["eStraightThrough"],
+        runtime_features=["service_runtime", "wireless_runtime"],
+        donor_graph_fingerprint={"link_count": 1, "named_pairs": ["R1 <-> SW1"], "media_types": ["eStraightThrough"]},
+        apply_safety_level="acceptance-verified" if origin == "cisco-local" else "safe-open-generate-supported",
+    )
+
+
+def test_build_capability_matrix_tracks_best_maturity() -> None:
+    entries = build_capability_matrix(
+        [
+            _sample("external-curated", donor_eligible=True, prototype_eligible=True, relative_path="curated.pkt"),
+            _sample("cisco-local", donor_eligible=True, prototype_eligible=True, relative_path="cisco.pkt"),
+        ]
+    )
+    vlan_router_entry = next(entry for entry in entries if entry.device_family == "routers" and entry.capability == "vlan")
+    assert vlan_router_entry.maturity_level == "acceptance-verified"
+    assert "cisco.pkt" in vlan_router_entry.accepted_donors
+
+
+def test_build_capability_matrix_maps_advanced_server_service_support() -> None:
+    sample = SampleDescriptor(
+        path="advanced_services.pkt",
+        relative_path="advanced_services.pkt",
+        version="9.0.0.0810",
+        device_count=1,
+        link_count=0,
+        devices=[{"name": "Server0", "type": "Server", "model": "Server-PT"}],
+        links=[],
+        capability_tags=[],
+        topology_tags=["server_services"],
+        preferred_roles=["preferred_services"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        service_support=["email", "syslog", "aaa"],
+        device_families=["servers"],
+        apply_safety_level="acceptance-verified",
+    )
+    entries = build_capability_matrix([sample])
+    entry_map = {(entry.device_family, entry.capability): entry for entry in entries}
+    assert ("servers", "server_email") in entry_map
+    assert ("servers", "server_syslog") in entry_map
+    assert ("servers", "server_aaa") in entry_map
+
+
+def test_build_coverage_gap_report_supports_advanced_server_service_capabilities() -> None:
+    plan = parse_intent("enable email on Server0 enable syslog on Server0 enable aaa on Server0")
+    sample = SampleDescriptor(
+        path="advanced_services.pkt",
+        relative_path="advanced_services.pkt",
+        version="9.0.0.0810",
+        device_count=1,
+        link_count=0,
+        devices=[{"name": "Server0", "type": "Server", "model": "Server-PT"}],
+        links=[],
+        capability_tags=[],
+        topology_tags=["server_services"],
+        preferred_roles=["preferred_services"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        service_support=["email", "syslog", "aaa"],
+        device_families=["servers"],
+        apply_safety_level="acceptance-verified",
+    )
+    report = build_coverage_gap_report(plan, [sample])
+    assert {"server_email", "server_syslog", "server_aaa"} <= set(report.supported_capabilities)
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    assert status_by_capability["server_email"]["acceptance_verified"] is True
+    assert status_by_capability["server_syslog"]["acceptance_verified"] is True
+    assert status_by_capability["server_aaa"]["acceptance_verified"] is True
+
+
+def test_build_capability_matrix_derives_iot_registration_and_control() -> None:
+    sample = SampleDescriptor(
+        path="iot_capabilities.pkt",
+        relative_path="iot_capabilities.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=1,
+        devices=[
+            {"name": "Server0", "type": "Server", "model": "Server-PT"},
+            {"name": "Home Gateway0", "type": "HomeGateway", "model": "HomeGateway-PT"},
+            {"name": "Door0", "type": "MCUComponent", "model": "Door"},
+        ],
+        links=[],
+        capability_tags=["iot"],
+        topology_tags=["general"],
+        preferred_roles=["preferred_iot"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["servers", "home/wireless routers", "iot devices"],
+        iot_roles=["server", "gateway", "thing"],
+        apply_safety_level="acceptance-verified",
+    )
+    entries = build_capability_matrix([sample])
+    entry_map = {(entry.device_family, entry.capability): entry for entry in entries}
+    assert ("iot devices", "iot") in entry_map
+    assert ("iot devices", "iot_registration") in entry_map
+    assert ("iot devices", "iot_control") in entry_map
+
+
+def test_build_coverage_gap_report_keeps_iot_capabilities_manual_acceptance_gated() -> None:
+    plan = parse_intent("iot smart home qur register CO2 to Server0 and control Garage through Home Gateway0")
+    sample = SampleDescriptor(
+        path="iot_capabilities.pkt",
+        relative_path="iot_capabilities.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=1,
+        devices=[
+            {"name": "Server0", "type": "Server", "model": "Server-PT"},
+            {"name": "Home Gateway0", "type": "HomeGateway", "model": "HomeGateway-PT"},
+            {"name": "Door0", "type": "MCUComponent", "model": "Door"},
+        ],
+        links=[],
+        capability_tags=["iot"],
+        topology_tags=["general"],
+        preferred_roles=["preferred_iot"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["servers", "home/wireless routers", "iot devices"],
+        iot_roles=["server", "gateway", "thing"],
+        apply_safety_level="acceptance-verified",
+    )
+    report = build_coverage_gap_report(plan, [sample])
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    assert {"iot", "iot_registration", "iot_control"} <= set(report.supported_capabilities)
+    assert {"iot", "iot_registration", "iot_control"} <= set(report.requires_manual_acceptance)
+    assert status_by_capability["iot_registration"]["acceptance_verified"] is False
+    assert status_by_capability["iot_registration"]["requires_manual_acceptance"] is True
+    assert status_by_capability["iot_control"]["acceptance_verified"] is False
+
+
+def test_build_inventory_capability_report_derives_iot_registration_and_control() -> None:
+    payload = {
+        "topology_summary": {"device_counts": {"HomeGateway": 1, "MCUComponent": 2, "Server": 1}},
+        "iot": {
+            "Home Gateway0": {"role": "gateway"},
+            "Server0": {"role": "server"},
+            "Door0": {"role": "thing"},
+            "Garage0": {"role": "thing"},
+        },
+    }
+    report = build_inventory_capability_report(payload)
+    assert {"iot", "iot_registration", "iot_control"} <= set(report["capabilities"])
+
+
+def test_build_inventory_capability_report_derives_programming_capabilities() -> None:
+    report = build_inventory_capability_report(
+        {
+            "topology_summary": {"device_counts": {"SBC": 1}},
+            "programming": {
+                "WebSockets Client": {
+                    "feature_tags": ["real_websocket", "python_programming"],
+                    "apps": [],
+                }
+            },
+        }
+    )
+
+    assert {"real_websocket", "python_programming"} <= set(report["capabilities"])
+
+
+def test_build_inventory_capability_report_derives_voice_capabilities() -> None:
+    report = build_inventory_capability_report(
+        {
+            "topology_summary": {"device_counts": {"Router": 1, "IpPhone": 1}},
+            "voice": {
+                "Router0": {"capabilities": ["voip", "call_manager", "ip_phone"]},
+                "IP Phone0": {"capabilities": ["voip", "ip_phone"]},
+            },
+        }
+    )
+
+    assert {"voip", "call_manager", "ip_phone"} <= set(report["capabilities"])
+
+
+def test_build_coverage_gap_report_promotes_explicit_programming_edits_to_edit_only() -> None:
+    plan = parse_intent(
+        'set "Py: real http server 2" script app "New Project (Python)" file "main.py" '
+        'content "from realhttp import *\\nprint(\\"ok\\")"'
+    )
+
+    report = build_coverage_gap_report(plan, [])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "industrial_iot"
+    assert parity_by_capability["real_http"]["donor_backed_ready"] is True
+    assert parity_by_capability["python_programming"]["donor_backed_ready"] is True
+    for capability in ["real_http", "python_programming"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_in_edit_only"
+
+
+def test_build_coverage_gap_report_promotes_explicit_automation_script_edits_to_edit_only() -> None:
+    plan = parse_intent(
+        'set "PC0" script app "tcpServer" file "tcpServer.js" '
+        'content "console.log(\\"tcp automation\\")"'
+    )
+
+    report = build_coverage_gap_report(plan, [])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "automation_controller"
+    for capability in ["javascript_programming", "tcp_udp_app"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["donor_backed_ready"] is True
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_in_edit_only"
+
+
+def test_build_coverage_gap_report_keeps_physical_media_family_report_only() -> None:
+    plan = parse_intent("coaxial cable dsl central office cell tower power distribution hot swappable ios license")
+
+    report = build_coverage_gap_report(plan, [])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "physical_media_device"
+    assert "cellular_5g" not in report.scenario_generate_readiness["critical_capabilities"]
+    for capability in ["coaxial", "cable_dsl", "central_office", "cell_tower", "power_distribution", "hot_swappable", "ios_license"]:
+        assert parity_by_capability[capability]["edit_supported"] is False
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "report_only"
+
+
+def test_build_coverage_gap_report_promotes_explicit_voice_edits_to_edit_only() -> None:
+    plan = parse_intent(
+        'set "Router0" telephony service source-address 192.168.10.1 port 2000 max-ephones 4 max-dn 4 '
+        'set "Router0" ephone-dn 1 number 1001 '
+        'set "Router0" ephone 1 mac 0001.42AA.BBCC button 1:1'
+    )
+
+    report = build_coverage_gap_report(plan, [])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "voice_collaboration"
+    for capability in ["voip", "ip_phone", "call_manager"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["donor_backed_ready"] is True
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_in_edit_only"
+
+
+def test_build_coverage_gap_report_keeps_broad_industrial_prompt_critical_generate_zero() -> None:
+    plan = parse_intent("mqtt real http websocket industrial iot")
+    sample = SampleDescriptor(
+        path="industrial.pkt",
+        relative_path="industrial.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "SBC0", "type": "SBC", "model": "SBC-PT"},
+            {"name": "MCU0", "type": "MCU", "model": "MCU-PT"},
+        ],
+        links=[],
+        capability_tags=["mqtt", "real_http", "real_websocket"],
+        topology_tags=["industrial_iot"],
+        preferred_roles=["preferred_industrial"],
+        device_families=["iot devices", "pt-specific edge/utility devices"],
+        archetype_tags=["industrial IoT"],
+    )
+
+    report = build_coverage_gap_report(plan, [sample])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "industrial_iot"
+    assert report.scenario_generate_readiness["status"] != "ready"
+    for capability in report.scenario_generate_readiness["critical_capabilities"]:
+        assert parity_by_capability[capability]["generate_supported"] is False
+
+
+def test_build_capability_matrix_derives_phase_a_switching_capabilities() -> None:
+    sample = SampleDescriptor(
+        path="phase_a.pkt",
+        relative_path="phase_a.pkt",
+        version="9.0.0.0810",
+        device_count=2,
+        link_count=1,
+        devices=[
+            {"name": "R1", "type": "Router", "model": "ISR4331"},
+            {"name": "SW1", "type": "Switch", "model": "2960-24TT"},
+        ],
+        links=[],
+        capability_tags=["vlan", "management_vlan"],
+        topology_tags=["router_on_a_stick"],
+        preferred_roles=["preferred_vlan", "preferred_management"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        apply_safety_level="acceptance-verified",
+    )
+    entries = build_capability_matrix([sample])
+    entry_map = {(entry.device_family, entry.capability): entry for entry in entries}
+    assert ("switches", "trunk") in entry_map
+    assert ("switches", "access_port") in entry_map
+    assert ("switches", "management_vlan") in entry_map
+    assert ("switches", "telnet") in entry_map
+    assert ("routers", "router_on_a_stick") in entry_map
+
+
+def test_build_capability_matrix_derives_printer_and_verification() -> None:
+    sample = SampleDescriptor(
+        path="printer_lab.pkt",
+        relative_path="printer_lab.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "SW1", "type": "Switch", "model": "2960-24TT"},
+            {"name": "PC1", "type": "PC", "model": "PC-PT"},
+            {"name": "PRN1", "type": "Printer", "model": "Printer-PT"},
+        ],
+        links=[],
+        capability_tags=["host_server"],
+        topology_tags=["department_lan"],
+        preferred_roles=["preferred_general"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        apply_safety_level="acceptance-verified",
+    )
+    entries = build_capability_matrix([sample])
+    entry_map = {(entry.device_family, entry.capability): entry for entry in entries}
+    assert ("end devices", "printer") in entry_map
+    assert ("end devices", "verification") in entry_map
+    assert ("switches", "verification") in entry_map
+
+
+def test_build_capability_matrix_derives_end_device_mutation_and_wireless_client() -> None:
+    sample = SampleDescriptor(
+        path="wireless_clients.pkt",
+        relative_path="wireless_clients.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=1,
+        devices=[
+            {"name": "AP1", "type": "LightWeightAccessPoint", "model": "AccessPoint-PT"},
+            {"name": "TAB1", "type": "Tablet", "model": "TabletPC-PT"},
+            {"name": "LAP1", "type": "Laptop", "model": "Laptop-PT"},
+        ],
+        links=[],
+        capability_tags=["wireless_ap"],
+        topology_tags=["wireless_edge"],
+        preferred_roles=["preferred_wireless"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        wireless_mode_tags=["ap_bridge"],
+        apply_safety_level="acceptance-verified",
+    )
+    entries = build_capability_matrix([sample])
+    entry_map = {(entry.device_family, entry.capability): entry for entry in entries}
+    assert ("end devices", "end_device_mutation") in entry_map
+    assert ("access points", "wireless_mutation") in entry_map
+    assert ("end devices", "wireless_client") in entry_map
+    assert ("end devices", "wireless_client_association") in entry_map
+
+
+def test_build_capability_matrix_uses_apply_safety_for_end_device_mutation() -> None:
+    sample = SampleDescriptor(
+        path="safe_end_devices.pkt",
+        relative_path="safe_end_devices.pkt",
+        version="8.2.1.4208",
+        device_count=2,
+        link_count=1,
+        devices=[
+            {"name": "PC1", "type": "PC", "model": "PC-PT"},
+            {"name": "PRN1", "type": "Printer", "model": "Printer-PT"},
+        ],
+        links=[],
+        capability_tags=["host_server"],
+        topology_tags=["department_lan"],
+        preferred_roles=["preferred_general"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        apply_safety_level="safe-open-generate-supported",
+    )
+    entries = build_capability_matrix([sample])
+    end_device_entry = next(
+        entry for entry in entries if entry.device_family == "end devices" and entry.capability == "end_device_mutation"
+    )
+    assert end_device_entry.maturity_level == "safe-open-generate-supported"
+
+
+def test_build_coverage_gap_report_marks_curated_and_manual_acceptance() -> None:
+    plan = parse_intent("6 sobeli sebeke qur, vlan, dns, ap olsun")
+    plan.capabilities = ["vlan", "wireless_ap", "dns", "iot"]
+    plan.device_requirements = {"Router": 1, "Switch": 2, "LightWeightAccessPoint": 2}
+    report = build_coverage_gap_report(
+        plan,
+        [
+            _sample("cisco-local", donor_eligible=True, prototype_eligible=True, relative_path="cisco.pkt"),
+            SampleDescriptor(
+                path="iot_ref.pkt",
+                relative_path="iot_ref.pkt",
+                version="9.0.0.0810",
+                device_count=2,
+                link_count=1,
+                devices=[{"name": "IoT1", "type": "IoT", "model": "Thing"}],
+                links=[],
+                capability_tags=["iot"],
+                topology_tags=["general"],
+                preferred_roles=["preferred_iot"],
+                trust_level="reference-only",
+                origin="external-reference",
+                role="reference",
+                prototype_eligible=False,
+                donor_eligible=False,
+                device_families=["iot devices"],
+                apply_safety_level="reference-known",
+            ),
+        ],
+    )
+    assert "vlan" in report.supported_capabilities
+    assert "iot" in report.supported_capabilities
+    assert "iot" in report.requires_manual_acceptance
+    assert any(status["capability"] == "wireless_ap" for status in report.capability_statuses)
+    assert report.recommended_next_actions
+
+
+def test_build_coverage_gap_report_exposes_capability_parity() -> None:
+    plan = parse_intent("enable email on Server0 enable syslog on Server0 enable aaa on Server0")
+    sample = SampleDescriptor(
+        path="advanced_services.pkt",
+        relative_path="advanced_services.pkt",
+        version="9.0.0.0810",
+        device_count=1,
+        link_count=0,
+        devices=[{"name": "Server0", "type": "Server", "model": "Server-PT"}],
+        links=[],
+        capability_tags=[],
+        topology_tags=["server_services"],
+        preferred_roles=["preferred_services"],
+        trust_level="trusted",
+        origin="external-curated",
+        role="secondary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        service_support=["email", "syslog", "aaa"],
+        device_families=["servers"],
+        apply_safety_level="safe-open-generate-supported",
+    )
+    report = build_coverage_gap_report(plan, [sample])
+    parity = {entry["capability"]: entry for entry in report.capability_parity}
+    assert parity["server_email"]["generate_supported"] is True
+    assert parity["server_email"]["best_maturity_level"] == "safe-open-generate-supported"
+    assert parity["server_email"]["generate_mismatch_reason"] == "supported_but_donor_limited"
+    assert parity["server_email"]["required_donor_families"] == ["servers"]
+    assert parity["server_email"]["required_archetypes"] == ["service-heavy"]
+    assert "server_runtime" in parity["server_email"]["required_runtime_features"]
+    assert "donor" in parity["server_email"]["recommended_next_action"].lower()
+
+
+def test_build_coverage_gap_report_classifies_wan_security_edge_family() -> None:
+    plan = parse_intent("wan security edge qur gre tunnel ve ipsec vpn ppp olsun 1 multilayer switch 1 asa 1 cloud")
+    sample = SampleDescriptor(
+        path="wan_edge.pkt",
+        relative_path="wan_edge.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "MLS1", "type": "MultiLayerSwitch", "model": "3560"},
+            {"name": "ASA1", "type": "ASA", "model": "ASA-5505"},
+            {"name": "Cloud0", "type": "Cloud", "model": "Cloud-PT"},
+        ],
+        links=[],
+        capability_tags=["vpn", "acl", "nat", "ppp"],
+        topology_tags=["general"],
+        preferred_roles=["preferred_security", "preferred_wan"],
+        trust_level="trusted",
+        origin="external-curated",
+        role="secondary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["multilayer switches", "security devices", "wan/cloud/dsl/cable devices"],
+        apply_safety_level="safe-open-generate-supported",
+    )
+    report = build_coverage_gap_report(plan, [sample])
+    assert report.scenario_family == "wan_security_edge"
+    assert report.scenario_generate_readiness["family"] == "wan_security_edge"
+    assert {"vpn", "ipsec", "gre", "ppp"} <= set(report.supported_capabilities)
+
+
+def test_build_inventory_capability_report_derives_phase_d_wan_security_capabilities() -> None:
+    payload = {
+        "topology_summary": {
+            "device_counts": {"MultiLayerSwitch": 1, "ASA": 1, "Cloud": 1},
+            "network_style": "wan_security",
+        },
+        "acl_names": ["EDGE_FILTER"],
+    }
+    report = build_inventory_capability_report(payload)
+    assert {"multilayer_switching", "security_edge", "wan", "vpn", "ipsec", "gre", "ppp", "acl"} <= set(report["capabilities"])
+
+
+def test_build_coverage_gap_report_uses_best_entry_for_manual_acceptance() -> None:
+    plan = parse_intent("campus sebekesi qur wifi")
+    plan.capabilities = ["wireless_ap"]
+    plan.device_requirements = {"LightWeightAccessPoint": 2, "Tablet": 2}
+    report = build_coverage_gap_report(
+        plan,
+        [
+            _sample("external-curated", donor_eligible=True, prototype_eligible=True, relative_path="curated_wireless.pkt"),
+            _sample("cisco-local", donor_eligible=True, prototype_eligible=True, relative_path="cisco_wireless.pkt"),
+        ],
+    )
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    assert "wireless_ap" not in report.requires_curated_donor
+    assert "wireless_ap" not in report.requires_manual_acceptance
+    assert status_by_capability["wireless_ap"]["requires_curated_donor"] is False
+    assert status_by_capability["wireless_ap"]["requires_manual_acceptance"] is False
+    assert status_by_capability["wireless_ap"]["best_maturity_level"] == "acceptance-verified"
+
+
+def test_build_coverage_gap_report_promotes_end_device_mutation_to_safe_open() -> None:
+    plan = parse_intent("set Tablet0 dns 192.168.10.20 set PC1 ipv4 dhcp")
+    report = build_coverage_gap_report(
+        plan,
+        [
+            SampleDescriptor(
+                path="safe_end_devices.pkt",
+                relative_path="safe_end_devices.pkt",
+                version="8.2.1.4208",
+                device_count=2,
+                link_count=1,
+                devices=[
+                    {"name": "PC1", "type": "PC", "model": "PC-PT"},
+                    {"name": "TAB1", "type": "Tablet", "model": "TabletPC-PT"},
+                ],
+                links=[],
+                capability_tags=["host_server"],
+                topology_tags=["department_lan"],
+                preferred_roles=["preferred_general"],
+                trust_level="trusted",
+                origin="cisco-local",
+                role="primary",
+                prototype_eligible=True,
+                donor_eligible=True,
+                apply_safety_level="safe-open-generate-supported",
+            )
+        ],
+    )
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    assert status_by_capability["end_device_mutation"]["best_maturity_level"] == "safe-open-generate-supported"
+    assert status_by_capability["end_device_mutation"]["safe_open_generate_supported"] is True
+    assert status_by_capability["end_device_mutation"]["requires_manual_acceptance"] is True
+
+
+def test_build_coverage_gap_report_supports_wireless_client_association_when_best_donor_is_verified() -> None:
+    plan = parse_intent("associate Tablet0 to AP1 ssid FIN_WIFI dhcp")
+    report = build_coverage_gap_report(
+        plan,
+        [
+            _sample("external-curated", donor_eligible=True, prototype_eligible=True, relative_path="curated_wireless_assoc.pkt"),
+            _sample("cisco-local", donor_eligible=True, prototype_eligible=True, relative_path="cisco_wireless_assoc.pkt"),
+        ],
+    )
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    assert "wireless_client_association" in report.supported_capabilities
+    assert "wireless_client_association" not in report.requires_manual_acceptance
+    assert status_by_capability["wireless_client_association"]["acceptance_verified"] is True
+    assert status_by_capability["wireless_client_association"]["requires_manual_acceptance"] is False
+
+
+def test_build_coverage_gap_report_supports_wireless_mutation_when_best_donor_is_verified() -> None:
+    plan = parse_intent("set AP1 ssid FIN_WIFI security wpa2-psk passphrase fin12345 channel 6")
+    report = build_coverage_gap_report(
+        plan,
+        [
+            _sample("external-curated", donor_eligible=True, prototype_eligible=True, relative_path="curated_wireless_mutation.pkt"),
+            _sample("cisco-local", donor_eligible=True, prototype_eligible=True, relative_path="cisco_wireless_mutation.pkt"),
+        ],
+    )
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    assert "wireless_mutation" in report.supported_capabilities
+    assert "wireless_mutation" not in report.requires_manual_acceptance
+    assert status_by_capability["wireless_mutation"]["acceptance_verified"] is True
+    assert status_by_capability["wireless_mutation"]["requires_manual_acceptance"] is False
+
+
+def test_select_capability_matrix_hits_filters_to_requested_capabilities_and_provider_families() -> None:
+    plan = parse_intent("3 dene switch ve 6 komputer ve 1 router vlanlarda 10,20,30")
+    plan.capabilities = ["vlan", "trunk", "router_on_a_stick"]
+    plan.device_requirements = {"Router": 1, "Switch": 3, "PC": 6}
+    hits = select_capability_matrix_hits(
+        plan,
+        [
+            _sample("cisco-local", donor_eligible=True, prototype_eligible=True, relative_path="cisco.pkt"),
+            SampleDescriptor(
+                path="server_only.pkt",
+                relative_path="server_only.pkt",
+                version="9.0.0.0810",
+                device_count=1,
+                link_count=0,
+                devices=[{"name": "Server1", "type": "Server", "model": "Server-PT"}],
+                links=[],
+                capability_tags=["server_http", "host_server"],
+                topology_tags=["general"],
+                preferred_roles=[],
+                trust_level="trusted",
+                origin="cisco-local",
+                role="primary",
+                prototype_eligible=True,
+                donor_eligible=True,
+                device_families=["servers"],
+                apply_safety_level="acceptance-verified",
+            ),
+        ],
+    )
+    assert hits
+    assert {entry.capability for entry in hits} == {"vlan", "trunk", "router_on_a_stick"}
+    assert all(entry.device_family in {"routers", "switches", "multilayer switches"} for entry in hits)
+
+
+def test_build_coverage_gap_report_tracks_best_maturity_per_capability() -> None:
+    plan = parse_intent("campus sebekesi qur dns dhcp wifi")
+    plan.capabilities = ["dhcp_pool", "server_dns", "wireless_ap"]
+    report = build_coverage_gap_report(
+        plan,
+        [
+            _sample("cisco-local", donor_eligible=True, prototype_eligible=True, relative_path="cisco.pkt"),
+            _sample("external-curated", donor_eligible=True, prototype_eligible=True, relative_path="curated.pkt"),
+        ],
+    )
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    assert status_by_capability["wireless_ap"]["acceptance_verified"] is True
+    assert status_by_capability["wireless_ap"]["best_maturity_level"] == "acceptance-verified"
+    assert status_by_capability["wireless_ap"]["edit_supported"] is True
+    assert status_by_capability["server_dns"]["config_mutation_supported"] is True
+
+
+def test_build_coverage_gap_report_classifies_campus_readiness() -> None:
+    plan = parse_intent("campus sebekesi qur vlan management telnet acl")
+    plan.capabilities = ["router_on_a_stick", "trunk", "access_port", "management_vlan", "telnet", "acl"]
+    plan.device_requirements = {"Router": 1, "Switch": 2}
+    sample = SampleDescriptor(
+        path="campus_ready.pkt",
+        relative_path="campus_ready.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "R1", "type": "Router", "model": "ISR4331"},
+            {"name": "SW1", "type": "Switch", "model": "2960-24TT"},
+            {"name": "SW2", "type": "Switch", "model": "2960-24TT"},
+        ],
+        links=[],
+        capability_tags=["vlan", "management_vlan", "acl"],
+        topology_tags=["router_on_a_stick", "department_lan"],
+        preferred_roles=["preferred_vlan", "preferred_management"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        apply_safety_level="acceptance-verified",
+    )
+    report = build_coverage_gap_report(plan, [sample])
+    assert report.scenario_family == "campus"
+    assert report.scenario_generate_readiness["status"] == "ready"
+    assert "router_on_a_stick" in report.scenario_generate_readiness["critical_capabilities"]
+
+
+def test_build_coverage_gap_report_classifies_service_heavy_as_donor_limited() -> None:
+    plan = parse_intent("dns dhcp ftp email syslog aaa server sebekesi qur")
+    plan.capabilities = ["server_dns", "server_dhcp", "server_ftp", "server_email", "server_syslog", "server_aaa"]
+    plan.device_requirements = {"Server": 1, "PC": 1}
+    sample = SampleDescriptor(
+        path="service_curated.pkt",
+        relative_path="service_curated.pkt",
+        version="9.0.0.0810",
+        device_count=2,
+        link_count=1,
+        devices=[
+            {"name": "Server0", "type": "Server", "model": "Server-PT"},
+            {"name": "PC0", "type": "PC", "model": "PC-PT"},
+        ],
+        links=[],
+        capability_tags=[],
+        topology_tags=["server_services"],
+        preferred_roles=["preferred_services"],
+        trust_level="curated",
+        origin="external-curated",
+        role="secondary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        service_support=["dns", "dhcp", "ftp", "email", "syslog", "aaa"],
+        device_families=["servers", "end devices"],
+        apply_safety_level="safe-open-generate-supported",
+    )
+    report = build_coverage_gap_report(plan, [sample])
+    assert report.scenario_family == "service_heavy"
+    assert report.scenario_generate_readiness["status"] == "donor_limited"
+    assert "server_email" in report.scenario_generate_readiness["critical_capabilities"]
+
+
+def test_build_coverage_gap_report_classifies_home_iot_as_acceptance_gated() -> None:
+    plan = parse_intent("home iot sebekesi qur register qapi cihazlarini gatewaye qos")
+    plan.capabilities = ["iot", "iot_registration", "iot_control", "wireless_ap"]
+    plan.device_requirements = {"HomeGateway": 1, "MCUComponent": 2}
+    sample = SampleDescriptor(
+        path="home_iot_ready.pkt",
+        relative_path="home_iot_ready.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "Home Gateway0", "type": "HomeGateway", "model": "HomeGateway-PT"},
+            {"name": "Door0", "type": "MCUComponent", "model": "Door"},
+            {"name": "Door1", "type": "MCUComponent", "model": "Door"},
+        ],
+        links=[],
+        capability_tags=["iot", "wireless_ap"],
+        topology_tags=["wireless_edge"],
+        preferred_roles=["preferred_iot"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        wireless_mode_tags=["home_router_edge"],
+        iot_roles=["gateway", "thing"],
+        device_families=["home/wireless routers", "iot devices"],
+        apply_safety_level="acceptance-verified",
+    )
+    report = build_coverage_gap_report(plan, [sample])
+    assert report.scenario_family == "home_iot"
+    assert report.scenario_generate_readiness["status"] == "acceptance_gated"
+    assert "iot_registration" in report.scenario_generate_readiness["critical_capabilities"]
+    assert report.scenario_generate_readiness["reasons"]
+
+
+def test_build_coverage_gap_report_supports_donor_backed_iot_registration_when_selected_donor_is_deterministic() -> None:
+    plan = parse_intent("register door0 to Home Gateway0 mode lan_server server-address 192.168.25.1 username admin password admin")
+    sample = SampleDescriptor(
+        path="home_iot_ready.pkt",
+        relative_path="home_iot_ready.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "Home Gateway0", "type": "HomeGateway", "model": "HomeGateway-PT"},
+            {"name": "door0", "type": "MCUComponent", "model": "Door"},
+            {"name": "Laptop0", "type": "Laptop", "model": "Laptop-PT"},
+        ],
+        links=[],
+        capability_tags=["iot", "wireless_ap"],
+        topology_tags=["small_office", "wireless_edge"],
+        preferred_roles=["preferred_iot", "preferred_wireless"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        wireless_mode_tags=["home_router_edge"],
+        iot_roles=["gateway", "thing"],
+        device_families=["home/wireless routers", "iot devices", "end devices"],
+        archetype_tags=["IoT/home gateway", "wireless-heavy"],
+        runtime_features=["iot_runtime", "wireless_runtime"],
+        apply_safety_level="acceptance-verified",
+    )
+    report = build_coverage_gap_report(plan, [sample], selected_donor="home_iot_ready.pkt")
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+    assert report.scenario_family == "home_iot"
+    assert report.scenario_generate_readiness["status"] == "ready"
+    assert status_by_capability["iot"]["acceptance_verified"] is True
+    assert status_by_capability["iot_registration"]["acceptance_verified"] is True
+    assert parity_by_capability["iot_registration"]["generate_mismatch_reason"] is None
+
+
+def test_build_coverage_gap_report_supports_donor_backed_wireless_client_association_when_selected_donor_is_deterministic() -> None:
+    plan = parse_intent("associate Laptop0 to Home Gateway0 ssid HOME dhcp")
+    sample = SampleDescriptor(
+        path="home_iot_ready.pkt",
+        relative_path="home_iot_ready.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "Home Gateway0", "type": "HomeGateway", "model": "HomeGateway-PT"},
+            {"name": "Laptop0", "type": "Laptop", "model": "Laptop-PT"},
+            {"name": "door0", "type": "MCUComponent", "model": "Door"},
+        ],
+        links=[],
+        capability_tags=["iot", "wireless_ap"],
+        topology_tags=["small_office", "wireless_edge"],
+        preferred_roles=["preferred_iot", "preferred_wireless"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        wireless_mode_tags=["home_router_edge"],
+        iot_roles=["gateway", "thing"],
+        device_families=["home/wireless routers", "iot devices", "end devices"],
+        archetype_tags=["IoT/home gateway", "wireless-heavy"],
+        runtime_features=["iot_runtime", "wireless_runtime"],
+        apply_safety_level="acceptance-verified",
+    )
+    report = build_coverage_gap_report(plan, [sample], selected_donor="home_iot_ready.pkt")
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+    assert report.scenario_family == "home_iot"
+    assert "wireless_client_association" in report.supported_capabilities
+    assert status_by_capability["wireless_client_association"]["acceptance_verified"] is True
+    assert parity_by_capability["wireless_client_association"]["generate_mismatch_reason"] is None
+
+
+def test_build_coverage_gap_report_supports_donor_backed_wan_security_when_selected_donor_has_runtime_evidence() -> None:
+    plan = parse_intent("wan security edge qur gre tunnel ve ipsec vpn ppp olsun 1 multilayer switch 1 asa 1 cloud")
+    plan.capabilities = sorted(
+        set(plan.capabilities)
+        | {"vpn", "ipsec", "gre", "ppp", "security_edge", "multilayer_switching"}
+    )
+    sample = SampleDescriptor(
+        path="wan_edge_ready.pkt",
+        relative_path="wan_edge_ready.pkt",
+        version="9.0.0.0810",
+        device_count=5,
+        link_count=4,
+        devices=[
+            {"name": "R1", "type": "Router", "model": "ISR4331"},
+            {"name": "R2", "type": "Router", "model": "ISR4331"},
+            {"name": "ASA1", "type": "ASA", "model": "ASA5505"},
+            {"name": "Cloud0", "type": "Cloud", "model": "Cloud-PT"},
+            {"name": "MLS1", "type": "MultiLayerSwitch", "model": "3560-24PS"},
+        ],
+        links=[
+            {"from": "R1", "to": "Cloud0", "media": "Serial"},
+            {"from": "Cloud0", "to": "R2", "media": "Serial"},
+            {"from": "R1", "to": "ASA1", "media": "eStraightThrough"},
+        ],
+        capability_tags=["vpn", "ipsec", "gre", "ppp", "wan", "security_edge", "acl", "nat", "multilayer_switching"],
+        topology_tags=["wan_security_edge"],
+        preferred_roles=["preferred_security", "preferred_wan"],
+        trust_level="curated",
+        origin="external-curated",
+        role="secondary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["routers", "security devices", "wan/cloud/dsl/cable devices", "multilayer switches"],
+        archetype_tags=["WAN/security edge"],
+        runtime_features=["workspace_validated", "tunnel_runtime", "wan_runtime", "security_runtime", "multilayer_runtime"],
+        apply_safety_level="safe-open-generate-supported",
+        acceptance_fixtures=["wan_security_complex"],
+    )
+
+    report = build_coverage_gap_report(plan, [sample], selected_donor="wan_edge_ready.pkt")
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "wan_security_edge"
+    assert report.scenario_generate_readiness["status"] == "ready"
+    for capability in ["vpn", "ipsec", "gre", "ppp", "security_edge", "multilayer_switching"]:
+        assert status_by_capability[capability]["acceptance_verified"] is True
+        assert parity_by_capability[capability]["generate_mismatch_reason"] is None
+
+
+def test_build_coverage_gap_report_keeps_l2_security_monitoring_generate_gated() -> None:
+    plan = parse_intent("snmp netflow span qos dhcp snooping dai dot1x port security")
+    sample = SampleDescriptor(
+        path="monitoring_security.pkt",
+        relative_path="monitoring_security.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "R1", "type": "Router", "model": "ISR4331"},
+            {"name": "SW1", "type": "Switch", "model": "2960-24TT"},
+            {"name": "PC1", "type": "PC", "model": "PC-PT"},
+        ],
+        links=[],
+        capability_tags=["snmp", "netflow", "span", "qos", "dhcp_snooping", "dai", "dot1x", "port_security"],
+        topology_tags=["monitoring"],
+        preferred_roles=["preferred_security"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["routers", "switches", "end devices"],
+        archetype_tags=["L2 security/monitoring"],
+        runtime_features=["workspace_validated"],
+        apply_safety_level="acceptance-verified",
+    )
+
+    report = build_coverage_gap_report(plan, [sample])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "l2_security_monitoring"
+    assert report.scenario_generate_readiness["status"] == "acceptance_gated"
+    for capability in ["snmp", "netflow", "span", "dhcp_snooping", "dai", "port_security"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_in_edit_only"
+    for capability in ["qos", "dot1x"]:
+        assert parity_by_capability[capability]["edit_supported"] is False
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "report_only"
+
+
+def test_build_coverage_gap_report_promotes_explicit_dot1x_and_qos_to_edit_only() -> None:
+    plan = parse_intent(
+        "set SW1 dot1x interface FastEthernet0/1 mode auto radius 192.168.1.10 key radius123 "
+        "set SW1 qos class-map VOICE match dscp ef policy-map QOS_POLICY class VOICE priority service-policy output FastEthernet0/1"
+    )
+
+    report = build_coverage_gap_report(plan, [])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "l2_security_monitoring"
+    for capability in ["dot1x", "qos"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["acceptance_verified"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_in_edit_only"
+    assert parity_by_capability["dot1x"]["donor_backed_ready"] is True
+    assert parity_by_capability["qos"]["donor_backed_ready"] is False
+
+
+def test_build_coverage_gap_report_keeps_advanced_wireless_broad_prompt_report_only() -> None:
+    plan = parse_intent("wlc radius wpa enterprise guest wifi bluetooth cellular")
+    sample = SampleDescriptor(
+        path="wireless_advanced.pkt",
+        relative_path="wireless_advanced.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "WLC1", "type": "LightWeightAccessPoint", "model": "WLC-2504"},
+            {"name": "AP1", "type": "LightWeightAccessPoint", "model": "LAP-PT"},
+            {"name": "Server1", "type": "Server", "model": "Server-PT"},
+        ],
+        links=[],
+        capability_tags=["wlc", "wpa_enterprise", "guest_wifi", "bluetooth", "cellular_5g"],
+        topology_tags=["wireless_edge"],
+        preferred_roles=["preferred_wireless"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["access points", "servers", "end devices"],
+        archetype_tags=["advanced wireless"],
+        runtime_features=["workspace_validated", "wireless_runtime"],
+    )
+
+    report = build_coverage_gap_report(plan, [sample])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "wireless_advanced"
+    assert report.scenario_generate_readiness["status"] == "acceptance_gated"
+    for capability in ["wlc", "wpa_enterprise", "guest_wifi", "bluetooth", "cellular_5g"]:
+        assert parity_by_capability[capability]["edit_supported"] is False
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "report_only"
+
+
+def test_build_coverage_gap_report_promotes_explicit_wireless_wep_and_enterprise_to_edit_only() -> None:
+    plan = parse_intent(
+        "set AP1 ssid LEGACY security wep passphrase abc12345 channel 6 "
+        "set WLC1 ssid CORP security wpa-enterprise radius 192.168.1.10 secret radius123"
+    )
+    sample = SampleDescriptor(
+        path="wireless_edit.pkt",
+        relative_path="wireless_edit.pkt",
+        version="9.0.0.0810",
+        device_count=2,
+        link_count=1,
+        devices=[
+            {"name": "AP1", "type": "LightWeightAccessPoint", "model": "LAP-PT"},
+            {"name": "WLC1", "type": "LightWeightAccessPoint", "model": "WLC-2504"},
+        ],
+        links=[],
+        capability_tags=["wireless_ap", "wep", "wpa_enterprise"],
+        topology_tags=["wireless_edge"],
+        preferred_roles=["preferred_wireless"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["access points"],
+        archetype_tags=["advanced wireless"],
+        runtime_features=["workspace_validated", "wireless_runtime"],
+    )
+
+    report = build_coverage_gap_report(plan, [sample])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "wireless_advanced"
+    for capability in ["wep", "wpa_enterprise"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["acceptance_verified"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_in_edit_only"
+
+
+def test_build_coverage_gap_report_promotes_explicit_wan_security_edits_to_edit_only() -> None:
+    plan = parse_intent(
+        "set R1 gre tunnel Tunnel0 source 10.0.0.1 destination 10.0.0.2 ip 172.16.0.1/30 "
+        "set R1 ppp interface Serial0/0/0 authentication chap "
+        "set R1 ipsec transform-set TS esp-aes esp-sha-hmac "
+        "set R1 crypto map VPNMAP 10 peer 203.0.113.2 transform-set TS match ACL_VPN interface Serial0/0/0 "
+        "set R1 cbac inspect FIREWALL protocol tcp interface FastEthernet0/0 direction in "
+        "set R1 zfw zone inside interface FastEthernet0/0 "
+        "set R1 zfw zone-pair INSIDE_OUT source inside destination outside policy POLICY1 "
+        "set R1 zfw class-map CM_WEB match protocol http policy-map POLICY1 action inspect"
+    )
+    sample = SampleDescriptor(
+        path="wan_security.pkt",
+        relative_path="wan_security.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "R1", "type": "Router", "model": "ISR4331"},
+            {"name": "R2", "type": "Router", "model": "ISR4331"},
+            {"name": "Cloud0", "type": "Cloud", "model": "Cloud-PT"},
+        ],
+        links=[],
+        capability_tags=["vpn", "ipsec", "gre", "ppp", "cbac", "zfw"],
+        topology_tags=["wan_security_edge"],
+        preferred_roles=["preferred_wan_security"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["routers", "wan/cloud/dsl/cable devices"],
+        archetype_tags=["WAN/security edge"],
+        runtime_features=["workspace_validated", "wan_runtime", "tunnel_runtime"],
+    )
+
+    report = build_coverage_gap_report(plan, [sample])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "wan_security_edge"
+    for capability in ["gre", "ppp", "ipsec", "vpn", "cbac", "zfw"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["acceptance_verified"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_in_edit_only"
+    assert parity_by_capability["zfw"]["donor_backed_ready"] is True
+    assert parity_by_capability["cbac"]["donor_backed_ready"] is False
+
+
+def test_build_coverage_gap_report_keeps_asa_deep_security_report_only() -> None:
+    plan = parse_intent("asa service policy clientless vpn asa acl nat sniffer")
+
+    report = build_coverage_gap_report(plan, [])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "wan_security_edge"
+    for capability in ["asa_acl_nat", "asa_service_policy", "clientless_vpn", "sniffer"]:
+        assert parity_by_capability[capability]["edit_supported"] is False
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "report_only"
+
+
+def test_build_coverage_gap_report_keeps_broad_wan_security_generate_donor_limited() -> None:
+    plan = parse_intent("wan security edge gre tunnel ipsec vpn ppp asa firewall multilayer")
+    sample = SampleDescriptor(
+        path="wan_security.pkt",
+        relative_path="wan_security.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "R1", "type": "Router", "model": "ISR4331"},
+            {"name": "R2", "type": "Router", "model": "ISR4331"},
+            {"name": "Cloud0", "type": "Cloud", "model": "Cloud-PT"},
+        ],
+        links=[],
+        capability_tags=["vpn", "ipsec", "gre", "ppp", "security_edge"],
+        topology_tags=["wan_security_edge"],
+        preferred_roles=["preferred_wan_security"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["routers", "security devices", "wan/cloud/dsl/cable devices"],
+        archetype_tags=["WAN/security edge"],
+        runtime_features=["workspace_validated", "wan_runtime", "tunnel_runtime", "security_runtime"],
+        apply_safety_level="acceptance-verified",
+    )
+
+    report = build_coverage_gap_report(plan, [sample], selected_donor="wan_security.pkt")
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "wan_security_edge"
+    assert report.scenario_generate_readiness["status"] != "ready"
+    for capability in ["gre", "ppp", "ipsec", "vpn", "security_edge"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["acceptance_verified"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_but_donor_limited"
+
+
+def test_build_coverage_gap_report_promotes_explicit_ipv6_selected_donor() -> None:
+    plan = parse_intent(
+        "set Router0 ipv6 unicast-routing "
+        "set Router0 interface FastEthernet0/0 ipv6 2001:db8:10::1/64 "
+        "set Router0 slaac on FastEthernet0/0 prefix 2001:db8:10::/64 "
+        "set Router0 dhcpv6 pool V6POOL prefix 2001:db8:10::/64 interface FastEthernet0/0 "
+        "set Router0 ospfv3 1 area 0 interface FastEthernet0/0 "
+        "set Router0 eigrp ipv6 100 interface FastEthernet0/0 "
+        "set Router0 ripng RIPNG interface FastEthernet0/0 "
+        "set Router0 hsrp 10 ipv6 2001:db8:10::fe interface FastEthernet0/0"
+    )
+    sample = SampleDescriptor(
+        path="ipv6_routing.pkt",
+        relative_path="ipv6_routing.pkt",
+        version="9.0.0.0810",
+        device_count=2,
+        link_count=1,
+        devices=[
+            {"name": "Router0", "type": "Router", "model": "ISR4331"},
+            {"name": "Router1", "type": "Router", "model": "ISR4331"},
+        ],
+        links=[],
+        capability_tags=["ipv6_slaac", "dhcpv6_stateful", "ospfv3", "eigrp_ipv6", "ripng", "hsrp"],
+        topology_tags=["ipv6_routing"],
+        preferred_roles=["preferred_ipv6"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["routers"],
+        archetype_tags=["IPv6/routing"],
+        runtime_features=["workspace_validated", "ipv6_runtime"],
+        apply_safety_level="safe-open-generate-supported",
+    )
+
+    report = build_coverage_gap_report(plan, [sample], selected_donor="ipv6_routing.pkt")
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "ipv6_routing"
+    assert report.scenario_generate_readiness["status"] == "ready"
+    for capability in ["ipv6_slaac", "dhcpv6_stateful", "ospfv3", "eigrp_ipv6", "ripng", "hsrp"]:
+        assert parity_by_capability[capability]["generate_supported"] is True
+        assert parity_by_capability[capability]["acceptance_verified"] is True
+        assert parity_by_capability[capability]["generate_mismatch_reason"] is None
+
+
+def test_build_coverage_gap_report_promotes_ipv6_routing_proof_subset_without_generate() -> None:
+    plan = parse_intent("ipv6 ospf dhcpv6 slaac hsrp")
+    report = build_coverage_gap_report(plan, [])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "ipv6_routing"
+    for capability in ["ospfv3", "hsrp"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["donor_backed_ready"] is True
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_in_edit_only"
+    for capability in ["ipv6_slaac", "dhcpv6_stateful"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["donor_backed_ready"] is False
+        assert parity_by_capability[capability]["generate_supported"] is False
+    assert report.scenario_generate_readiness["family"] == "ipv6_routing"
+    assert report.scenario_generate_readiness["status"] != "ready"
+
+
+def test_build_coverage_gap_report_keeps_ipv6_edit_proven_without_selected_donor() -> None:
+    plan = parse_intent(
+        "set Router0 ipv6 unicast-routing "
+        "set Router0 interface FastEthernet0/0 ipv6 2001:db8:10::1/64 "
+        "set Router0 dhcpv6 pool V6POOL prefix 2001:db8:10::/64 interface FastEthernet0/0"
+    )
+    sample = SampleDescriptor(
+        path="ipv6_routing.pkt",
+        relative_path="ipv6_routing.pkt",
+        version="9.0.0.0810",
+        device_count=1,
+        link_count=0,
+        devices=[{"name": "Router0", "type": "Router", "model": "ISR4331"}],
+        links=[],
+        capability_tags=["ipv6_slaac", "dhcpv6_stateful"],
+        topology_tags=["ipv6_routing"],
+        preferred_roles=["preferred_ipv6"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["routers"],
+        archetype_tags=["IPv6/routing"],
+        runtime_features=["workspace_validated", "ipv6_runtime"],
+    )
+
+    report = build_coverage_gap_report(plan, [sample])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "ipv6_routing"
+    for capability in ["ipv6_slaac", "dhcpv6_stateful"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["acceptance_verified"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_in_edit_only"
+
+
+def test_build_coverage_gap_report_treats_l2_resiliency_bgp_as_edit_only() -> None:
+    plan = parse_intent(
+        "set R1 bgp 65001 neighbor 10.0.0.2 remote-as 65002 network 192.168.1.0 mask 255.255.255.0 "
+        "set SW1 stp mode rapid-pvst vlan 10 root primary "
+        "set SW1 etherchannel 1 mode active interfaces FastEthernet0/1 FastEthernet0/2 "
+        "set SW1 etherchannel 2 mode desirable interfaces FastEthernet0/3 FastEthernet0/4 "
+        "set SW1 vtp domain CAMPUS mode server version 2 "
+        "set SW1 dtp interface FastEthernet0/1 mode dynamic desirable"
+    )
+    sample = SampleDescriptor(
+        path="l2_resiliency_bgp.pkt",
+        relative_path="BGP STP EtherChannel VTP DTP/lab.pkt",
+        version="9.0.0.0810",
+        device_count=2,
+        link_count=1,
+        devices=[
+            {"name": "R1", "type": "Router", "model": "ISR4331"},
+            {"name": "SW1", "type": "Switch", "model": "2960-24TT"},
+        ],
+        links=[],
+        capability_tags=["bgp", "stp", "rstp", "etherchannel", "lacp", "pagp", "vtp", "dtp"],
+        topology_tags=["l2_resiliency_routing"],
+        preferred_roles=["preferred_routing", "preferred_l2_resiliency"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        device_families=["routers", "switches"],
+        archetype_tags=["L2 resiliency/routing"],
+        runtime_features=["workspace_validated", "l2_resiliency_runtime"],
+    )
+
+    report = build_coverage_gap_report(plan, [sample])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "l2_resiliency_routing"
+    for capability in ["bgp", "stp", "rstp", "etherchannel", "lacp", "pagp", "vtp", "dtp"]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["donor_backed_ready"] is False
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["acceptance_verified"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_in_edit_only"
+    assert report.critical_parity_generate_ready_count == 0
+
+
+def test_build_coverage_gap_report_treats_ipv4_routing_management_as_edit_only() -> None:
+    plan = parse_intent(
+        "set R1 ospfv2 1 network 10.0.0.0 wildcard 0.0.0.255 area 0 "
+        "set R1 eigrp ipv4 100 network 10.0.0.0 wildcard 0.0.0.255 no-auto-summary "
+        "set R1 rip version 2 network 10.0.0.0 no-auto-summary "
+        "set R1 static-route 0.0.0.0/0 via 10.0.0.1 "
+        "set R1 dhcp-relay interface GigabitEthernet0/0 helper 192.168.1.10 "
+        "set R1 nat static 192.168.1.10 203.0.113.10 "
+        "set R1 pat acl 1 interface Serial0/0/0 overload "
+        "set R1 ssh domain lab.local username admin password cisco123 modulus 1024 "
+        "set R1 ntp server 192.168.1.20 "
+        "set R1 syslog server 192.168.1.30"
+    )
+
+    report = build_coverage_gap_report(plan, [])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "ipv4_routing_management"
+    assert report.critical_parity_generate_ready_count == 0
+    for capability in [
+        "ospfv2",
+        "eigrp_ipv4",
+        "ripv2",
+        "default_route",
+        "dhcp_relay",
+        "nat_static",
+        "pat",
+        "ssh_ios",
+        "ntp_ios",
+        "syslog_ios",
+    ]:
+        assert parity_by_capability[capability]["edit_supported"] is True
+        assert parity_by_capability[capability]["donor_backed_ready"] is False
+        assert parity_by_capability[capability]["generate_supported"] is False
+        assert parity_by_capability[capability]["generate_mismatch_reason"] == "supported_in_edit_only"
+
+
+def test_build_coverage_gap_report_keeps_broad_ipv4_routing_management_not_generate_ready() -> None:
+    plan = parse_intent("ospf eigrp rip static default route dhcp relay nat pat ssh ntp syslog")
+    report = build_coverage_gap_report(plan, [])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "ipv4_routing_management"
+    assert report.critical_parity_generate_ready_count == 0
+    for capability in report.scenario_generate_readiness["critical_capabilities"]:
+        assert parity_by_capability[capability]["generate_supported"] is False
+
+
+def test_build_coverage_gap_report_keeps_broad_l2_resiliency_bgp_not_generate_ready() -> None:
+    plan = parse_intent("bgp stp rstp etherchannel lacp pagp vtp dtp")
+    report = build_coverage_gap_report(plan, [])
+    parity_by_capability = {entry["capability"]: entry for entry in report.capability_parity}
+
+    assert report.scenario_family == "l2_resiliency_routing"
+    assert report.critical_parity_generate_ready_count == 0
+    for capability in ["bgp", "stp", "rstp", "etherchannel", "lacp", "pagp", "vtp", "dtp"]:
+        assert parity_by_capability[capability]["generate_supported"] is False
+
+
+def test_build_coverage_gap_report_supports_phase_a_switching_capabilities() -> None:
+    plan = parse_intent("router-on-a-stick trunk access management telnet")
+    plan.capabilities = ["router_on_a_stick", "trunk", "access_port", "management_vlan", "telnet"]
+    plan.device_requirements = {"Router": 1, "Switch": 1}
+    sample = SampleDescriptor(
+        path="phase_a.pkt",
+        relative_path="phase_a.pkt",
+        version="9.0.0.0810",
+        device_count=2,
+        link_count=1,
+        devices=[
+            {"name": "R1", "type": "Router", "model": "ISR4331"},
+            {"name": "SW1", "type": "Switch", "model": "2960-24TT"},
+        ],
+        links=[],
+        capability_tags=["vlan", "management_vlan"],
+        topology_tags=["router_on_a_stick"],
+        preferred_roles=["preferred_vlan", "preferred_management"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        apply_safety_level="acceptance-verified",
+    )
+    report = build_coverage_gap_report(plan, [sample])
+    assert not report.unsupported_capabilities
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    assert status_by_capability["router_on_a_stick"]["acceptance_verified"] is True
+    assert status_by_capability["trunk"]["safe_open_generate_supported"] is True
+    assert status_by_capability["access_port"]["edit_supported"] is True
+    assert status_by_capability["management_vlan"]["acceptance_verified"] is True
+    assert status_by_capability["telnet"]["acceptance_verified"] is True
+
+
+def test_build_coverage_gap_report_supports_printer_and_verification() -> None:
+    plan = parse_intent("printer verification")
+    plan.capabilities = ["printer", "verification"]
+    plan.device_requirements = {"Switch": 1, "PC": 1, "Printer": 1}
+    sample = SampleDescriptor(
+        path="printer_lab.pkt",
+        relative_path="printer_lab.pkt",
+        version="9.0.0.0810",
+        device_count=3,
+        link_count=2,
+        devices=[
+            {"name": "SW1", "type": "Switch", "model": "2960-24TT"},
+            {"name": "PC1", "type": "PC", "model": "PC-PT"},
+            {"name": "PRN1", "type": "Printer", "model": "Printer-PT"},
+        ],
+        links=[],
+        capability_tags=["host_server"],
+        topology_tags=["department_lan"],
+        preferred_roles=["preferred_general"],
+        trust_level="trusted",
+        origin="cisco-local",
+        role="primary",
+        prototype_eligible=True,
+        donor_eligible=True,
+        apply_safety_level="acceptance-verified",
+    )
+    report = build_coverage_gap_report(plan, [sample])
+    assert not report.unsupported_capabilities
+    status_by_capability = {status["capability"]: status for status in report.capability_statuses}
+    assert status_by_capability["printer"]["acceptance_verified"] is True
+    assert status_by_capability["verification"]["safe_open_generate_supported"] is True
+
+
+def test_build_donor_graph_fit_detects_media_and_port_conflicts() -> None:
+    sample = SampleDescriptor(
+        path="sample.pkt",
+        relative_path="sample.pkt",
+        version="9.0.0.0810",
+        device_count=2,
+        link_count=1,
+        devices=[
+            {"name": "R1", "type": "Router", "model": "ISR4331"},
+            {"name": "SW1", "type": "Switch", "model": "2960-24TT"},
+        ],
+        links=[
+            {
+                "from": "R1",
+                "to": "SW1",
+                "media": "eStraightThrough",
+                "ports": ["GigabitEthernet0/0/1", "GigabitEthernet0/1"],
+            }
+        ],
+        capability_tags=["vlan"],
+        topology_tags=["department_lan"],
+        preferred_roles=[],
+    )
+    blueprint = {
+        "topology_archetype": "chain",
+        "devices": [{"name": "R1"}, {"name": "SW1"}],
+        "links": [
+            {
+                "a": {"dev": "R1", "port": "GigabitEthernet0/0/0"},
+                "b": {"dev": "SW1", "port": "GigabitEthernet0/1"},
+                "media": "crossover",
+            }
+        ]
+    }
+    fit = build_donor_graph_fit(sample, blueprint)
+    assert fit.matched_pairs == ["R1 <-> SW1"]
+    assert fit.port_media_conflicts
+    assert fit.layout_reuse_score > 0
+    assert any("media mismatch" in conflict for conflict in fit.port_media_conflicts)
+    assert any("port mismatch" in conflict for conflict in fit.port_media_conflicts)
+
+
+def test_build_blueprint_plan_uses_plan_links_when_blueprint_missing() -> None:
+    plan = parse_intent("set SW1 vlan 10 name Finance")
+    plan.device_requirements = {"Switch": 1, "Router": 1}
+    plan.capabilities = ["vlan"]
+    plan.links = [
+        {
+            "a": {"dev": "SW1", "port": "GigabitEthernet0/1"},
+            "b": {"dev": "R1", "port": "GigabitEthernet0/0/0"},
+            "media": "straight-through",
+        }
+    ]
+    blueprint_plan = build_blueprint_plan(plan)
+    assert blueprint_plan.required_link_pairs == ["R1 <-> SW1"]
+    assert blueprint_plan.required_donor_capacity["Switch"] == 1
+
+
+def test_build_inventory_capability_report_infers_basic_features() -> None:
+    payload = {
+        "services": {"Server1": ["dns_server", "http_server"]},
+        "wireless": {"AP1": {"mode": "ap", "ssid": "FIN"}},
+        "vlans": {"SW1": [{"id": "10", "name": "FIN"}]},
+        "dhcp_pools": {"R1": ["FIN"]},
+        "acl_names": {"R1": ["ADMIN_ONLY"]},
+        "topology_summary": {"device_counts": {"Router": 1, "Switch": 1, "LightWeightAccessPoint": 1}},
+    }
+    report = build_inventory_capability_report(payload)
+    assert "routers" in report["device_families"]
+    assert "dns" in report["capabilities"]
+    assert "wireless_ap" in report["capabilities"]
+    assert "end_device_mutation" not in report["capabilities"]
+
+
+def test_build_inventory_capability_report_infers_end_device_mutation() -> None:
+    payload = {
+        "services": {},
+        "wireless": {},
+        "vlans": {},
+        "dhcp_pools": {},
+        "acl_names": {},
+        "topology_summary": {"device_counts": {"PC": 2, "Printer": 1, "Switch": 1}},
+    }
+    report = build_inventory_capability_report(payload)
+    assert "end devices" in report["device_families"]
+    assert "end_device_mutation" in report["capabilities"]
+
+
+def test_build_inventory_capability_report_infers_wireless_client_association_for_end_devices() -> None:
+    payload = {
+        "services": {},
+        "wireless": {"AP1": {"mode": "ap", "ssid": "FIN"}},
+        "vlans": {},
+        "dhcp_pools": {},
+        "acl_names": {},
+        "topology_summary": {"device_counts": {"Tablet": 2, "LightWeightAccessPoint": 1}},
+    }
+    report = build_inventory_capability_report(payload)
+    assert "wireless_client_association" in report["capabilities"]
+
+
+def test_build_inventory_capability_report_infers_wireless_mutation() -> None:
+    payload = {
+        "topology_summary": {"device_counts": {"LightWeightAccessPoint": 1, "Tablet": 1}},
+        "wireless": {"AP1": {"ssid": "FIN_WIFI"}},
+    }
+    report = build_inventory_capability_report(payload)
+    assert "wireless_mutation" in report["capabilities"]
+
+
+def test_build_inventory_capability_report_infers_ipv6_routing_features() -> None:
+    payload = {
+        "topology_summary": {"device_counts": {"Router": 1}},
+        "routing": {
+            "Router0": {
+                "capabilities": [
+                    "ipv6_slaac",
+                    "dhcpv6_stateful",
+                    "ospfv3",
+                    "eigrp_ipv6",
+                    "ripng",
+                    "hsrp",
+                ]
+            }
+        },
+    }
+    report = build_inventory_capability_report(payload)
+    assert "routers" in report["device_families"]
+    assert {"ipv6_slaac", "dhcpv6_stateful", "ospfv3", "eigrp_ipv6", "ripng", "hsrp"} <= set(report["capabilities"])
+
+
+def test_build_inventory_capability_report_infers_l2_security_monitoring_features() -> None:
+    payload = {
+        "topology_summary": {"device_counts": {"Switch": 1, "Router": 1}},
+        "l2_security_monitoring": {
+            "SW1": {"capabilities": ["dhcp_snooping", "dai", "lldp", "rep", "span", "port_security"]},
+            "R1": {"capabilities": ["snmp", "netflow"]},
+        },
+    }
+    report = build_inventory_capability_report(payload)
+    assert {"routers", "switches"} <= set(report["device_families"])
+    assert {"dhcp_snooping", "dai", "lldp", "rep", "span", "port_security", "snmp", "netflow"} <= set(report["capabilities"])
+
+
+def test_build_inventory_capability_report_infers_ipv4_routing_management_features() -> None:
+    payload = {
+        "topology_summary": {"device_counts": {"Router": 1}},
+        "ipv4_routing_management": {
+            "R1": {
+                "capabilities": [
+                    "ospfv2",
+                    "eigrp_ipv4",
+                    "ripv2",
+                    "static_route",
+                    "default_route",
+                    "dhcp_relay",
+                    "nat_static",
+                    "nat_dynamic",
+                    "pat",
+                    "ssh_ios",
+                    "ntp_ios",
+                    "syslog_ios",
+                ]
+            }
+        },
+    }
+    report = build_inventory_capability_report(payload)
+
+    assert "routers" in report["device_families"]
+    assert {
+        "ospfv2",
+        "eigrp_ipv4",
+        "ripv2",
+        "static_route",
+        "default_route",
+        "dhcp_relay",
+        "nat_static",
+        "nat_dynamic",
+        "pat",
+        "ssh_ios",
+        "ntp_ios",
+        "syslog_ios",
+    } <= set(report["capabilities"])
